@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/9.6/phpunit.xsd"
+         bootstrap="./tests/bootstrap.php"
+         colors="true"
+         processIsolation="false"
+         cacheResult="false">
+
+    <php>
+        <ini name="memory_limit" value="1G"/>
+        <ini name="max_execution_time" value="600"/>
+    </php>
+
+    <testsuites>
+        <testsuite name="Runtime">
+            <directory>./tests/Runtime</directory>
+        </testsuite>
+        <testsuite name="Sync">
+            <directory>./tests/Sync</directory>
+        </testsuite>
+        <testsuite name="Stream">
+            <directory>./tests/Stream</directory>
+        </testsuite>
+        <testsuite name="Net">
+            <directory>./tests/Net</directory>
+        </testsuite>
+    </testsuites>
+
+    <coverage includeUncoveredFiles="true">
+        <include>
+            <directory suffix=".php">./src</directory>
+        </include>
+        <exclude>
+        </exclude>
+    </coverage>
+
+    <logging>
+        <junit outputFile="./logs/junit.xml"/>
+        <testdoxHtml outputFile="./logs/.phpunit-result.html"/>
+        <testdoxText outputFile="./logs/.phpunit-result.txt"/>
+    </logging>
+</phpunit>

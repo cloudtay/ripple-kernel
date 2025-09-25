@@ -1,0 +1,13 @@
+.idea
+ripple-kernel.iml
+/temp/
+
+/debug/
+/logs/
+/build/
+/vendor/
+
+composer.lock
+
+.php-cs-fixer.cache
+.phpunit*
