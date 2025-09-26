@@ -242,7 +242,7 @@ class MutexTest extends BaseTestCase
         // 释放锁
         $mutex->unlock();
 
-        Time::sleep(0.2);
+        wait();
         $this->assertCount(5, $results);
         $this->assertEquals(0, $mutex->waitingCount());
     }
