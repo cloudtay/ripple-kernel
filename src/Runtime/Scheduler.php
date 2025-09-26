@@ -29,8 +29,6 @@ use Throwable;
 
 use function array_shift;
 use function str_repeat;
-use function array_slice;
-use function debug_backtrace;
 
 Runtime::init();
 
@@ -140,7 +138,7 @@ final class Scheduler
                 $coroutine->state(),
                 Coroutine::STATE_RUNNABLE,
                 $coroutine,
-                "self::enqueue() called with non-runnable coroutine"
+                "Scheduler::enqueue() called with non-runnable coroutine"
             );
         }
 
@@ -281,8 +279,6 @@ final class Scheduler
      */
     public static function start(Coroutine $coroutine): void
     {
-        Runtime::$DEBUG &&
-        $coroutine->addTrace($coroutine->state(), 'start', array_slice(debug_backtrace(), 0, 1));
         $coroutine->runnable();
 
         self::$coroutineMap[$coroutine->key()] = WeakReference::create($coroutine);
@@ -307,9 +303,6 @@ final class Scheduler
      */
     public static function resume(Coroutine $coroutine, mixed $value = null): ControlResult
     {
-        Runtime::$DEBUG &&
-        $coroutine->addTrace($coroutine->state(), 'resume', array_slice(debug_backtrace(), 0, 1));
-
         try {
             return new ControlResult('resume', $coroutine->resume($value), $coroutine);
         } catch (Throwable $exception) {
@@ -330,9 +323,6 @@ final class Scheduler
      */
     public static function throw(Coroutine $coroutine, Throwable $exception): ControlResult
     {
-        Runtime::$DEBUG &&
-        $coroutine->addTrace($coroutine->state(), 'throw', array_slice(debug_backtrace(), 0, 1));
-
         try {
             return new ControlResult('throw', $coroutine->throw($exception), $coroutine);
         } catch (Throwable $exception) {

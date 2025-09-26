@@ -168,14 +168,6 @@ class HttpFileTransferTest extends BaseTestCase
 
             $serverMd5 = $response->getHeaderLine('Content-MD5');
             $localMd5  = md5_file($downloadedFile);
-            $serverContentLength = $response->getHeaderLine('Content-Length');
-            $localFileSize = filesize($downloadedFile);
-
-            echo "serverMd5: $serverMd5\n";
-            echo "localMd5: $localMd5\n";
-            echo "serverContentLength: $serverContentLength\n";
-            echo "localFileSize: $localFileSize\n";
-
             $this->assertNotEmpty($serverMd5, '服务器未返回Content-MD5头');
             $this->assertEquals($serverMd5, $localMd5, '下载文件MD5校验失败');
 

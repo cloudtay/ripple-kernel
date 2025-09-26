@@ -34,9 +34,9 @@ final class FiberCoroutine extends Coroutine
      */
     public function __get(string $name): mixed
     {
-        return match($name) {
+        return match ($name) {
             'result' => $this->result,
-            default =>  new UnexpectedValueException("Property {$name} does not exist or is not accessible")
+            default => new UnexpectedValueException("Property {$name} does not exist or is not accessible")
         };
     }
 
@@ -74,7 +74,6 @@ final class FiberCoroutine extends Coroutine
         try {
             $result = $this->fiber->start(...$this->args);
         } catch (Throwable $exception) {
-            $this->result = $exception;
             $this->setState(Coroutine::STATE_DEAD);
             throw $exception;
         }
@@ -103,15 +102,9 @@ final class FiberCoroutine extends Coroutine
         }
 
         $this->setState(Coroutine::STATE_WAITING);
-
-        try {
-            $result = $this->fiber->suspend($value);
-        } catch (Throwable $exception) {
-            $this->setState(Coroutine::STATE_DEAD);
-            throw $exception;
-        }
-
+        $result = $this->fiber->suspend($value);
         $this->setState(Coroutine::STATE_RUNNING);
+
         return $result;
     }
 
@@ -123,6 +116,10 @@ final class FiberCoroutine extends Coroutine
      */
     public function resume(mixed $value = null): mixed
     {
+        if ($this->state !== Coroutine::STATE_WAITING) {
+            throw new CoroutineStateException('Coroutine::resume() called with coroutine not in running state');
+        }
+
         $this->setState(Coroutine::STATE_RUNNING);
 
         try {
@@ -151,6 +148,10 @@ final class FiberCoroutine extends Coroutine
      */
     public function throw(Throwable $exception): mixed
     {
+        if ($this->state !== Coroutine::STATE_WAITING) {
+            throw new CoroutineStateException('Coroutine::throw() called with coroutine not in running state');
+        }
+
         $this->setState(Coroutine::STATE_RUNNING);
 
         try {
@@ -182,7 +183,7 @@ final class FiberCoroutine extends Coroutine
             new CoroutineStateException("Unable to recycle a coroutine in use");
         }
 
-        $this->fiber = new Fiber($callback);
+        $this->callback = $callback;
         $this->recycleReset();
     }
 

@@ -14,6 +14,7 @@ namespace Ripple\Runtime\Trait;
 
 use Closure;
 use Ripple\Coroutine;
+use Ripple\Runtime\Exception\CoroutineException;
 
 use function array_pop;
 use function array_reverse;
@@ -62,6 +63,12 @@ trait StateMachine
     {
         if (isset($this->state) && $this->state === $state) {
             return;
+        }
+
+        if ($state === Coroutine::STATE_DEAD && isset($this->fiber)) {
+            if (!$this->fiber->isTerminated()) {
+                throw new CoroutineException('状态不同步');
+            }
         }
 
         $this->state = $state;

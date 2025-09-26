@@ -90,7 +90,7 @@ class MutexTest extends BaseTestCase
             go(function () use ($mutex, &$sharedData, &$results, $i) {
                 $mutex->lock();
 
-                Time::sleep(1);
+                Time::sleep(0.1);
                 $oldValue = $sharedData;
                 $sharedData = $oldValue + 1;
                 $results[] = "Coroutine $i: $oldValue -> $sharedData";
@@ -152,12 +152,12 @@ class MutexTest extends BaseTestCase
         go(function () use ($mutex, &$results) {
             $mutex->lock();
             $results[] = "Coroutine 1 got lock";
-            Time::sleep(1);
+            Time::sleep(0.1);
         });
 
         // 协程2尝试解锁协程1的锁
         go(function () use ($mutex, &$results) {
-            Time::sleep(1);
+            Time::sleep(0.1);
             try {
                 $mutex->unlock();
                 $results[] = "Coroutine 2 unlocked (should not happen)";
@@ -262,7 +262,7 @@ class MutexTest extends BaseTestCase
             $coroutines[] = go(function () use ($mutex, &$counter, &$results, $i) {
                 for ($j = 0; $j < 10; $j++) {
                     $mutex->lock();
-                    Time::sleep(1); // 模拟一些工作
+                    Time::sleep(0.1); // 模拟一些工作
                     $counter++;
                     $mutex->unlock();
                 }
