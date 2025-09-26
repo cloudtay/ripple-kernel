@@ -65,6 +65,12 @@ abstract class Coroutine
     protected array $defers = [];
 
     /**
+     * defer 是否已执行标记
+     * @var bool
+     */
+    protected bool $defersExecuted = false;
+
+    /**
      * 创建协程
      * @param Closure $callback
      */
@@ -180,5 +186,26 @@ abstract class Coroutine
         }
 
         return Scheduler::findCoroutine(Fiber::getCurrent());
+    }
+
+    /**
+     * 执行defer回调
+     * @return void
+     */
+    public function executeDefers(): void
+    {
+        if ($this->defersExecuted) {
+            return;
+        }
+
+        $this->defersExecuted = true;
+
+        foreach ($this->defers as $callback) {
+            try {
+                $callback();
+            } catch (Throwable $exception) {
+                // 忽略 defer 回调中的异常
+            }
+        }
     }
 }

@@ -199,6 +199,9 @@ final class FiberCoroutine extends Coroutine
         // 清空清理回调队列
         $this->defers = [];
 
+        // 重置 defer 执行标记
+        $this->defersExecuted = false;
+
         // 重置状态
         $this->state = Coroutine::STATE_CREATED;
 

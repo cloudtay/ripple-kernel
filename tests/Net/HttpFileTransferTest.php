@@ -23,6 +23,7 @@ use function tempnam;
 use function unlink;
 use function usleep;
 use function mt_rand;
+use function strval;
 
 use const SIGKILL;
 

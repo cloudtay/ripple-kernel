@@ -294,12 +294,7 @@ final class Scheduler
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());
-                foreach ($coroutine->defers() as $callback) {
-                    try {
-                        $callback();
-                    } catch (Throwable $exception) {
-                    }
-                }
+                $coroutine->executeDefers();
             }
         }
     }
@@ -322,12 +317,7 @@ final class Scheduler
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());
-                foreach ($coroutine->defers() as $callback) {
-                    try {
-                        $callback();
-                    } catch (Throwable $exception) {
-                    }
-                }
+                $coroutine->executeDefers();
             }
         }
     }
@@ -350,12 +340,7 @@ final class Scheduler
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());
-                foreach ($coroutine->defers() as $callback) {
-                    try {
-                        $callback();
-                    } catch (Throwable $exception) {
-                    }
-                }
+                $coroutine->executeDefers();
             }
         }
     }

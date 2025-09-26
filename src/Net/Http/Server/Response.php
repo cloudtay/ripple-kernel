@@ -117,8 +117,6 @@ class Response
                                 $buf = $this->body->read(8192);
                                 if ($buf) {
                                     $stream->writeAsync($buf);
-                                    $stream->flushOnce();
-                                    return;
                                 }
 
                                 if ($this->body->eof()) {
@@ -126,14 +124,11 @@ class Response
                                 }
                             }
 
-                            // 缓冲区空
-                            if ($stream->writeBuffer()->length() === 0) {
-                                Scheduler::resume($owner);
-                            }
+                            $stream->flushOnce();
 
-                            // 缓冲区还有数据
-                            else {
-                                $stream->flushOnce();
+                            // 文件末尾 && 缓冲区空
+                            if ($this->body->eof() && $stream->writeBuffer()->length() === 0) {
+                                Scheduler::resume($owner);
                             }
                         } catch (Throwable) {
                             Scheduler::resume($owner);
