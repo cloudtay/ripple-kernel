@@ -26,15 +26,12 @@ use function call_user_func;
 use function define;
 use function dirname;
 use function ini_set;
-use function gc_disable;
 
 ini_set('max_execution_time', 0);
 ini_set('memory_limit', -1);
 define("__RIPPLE_RUNTIME_PKG_PATH", Runtime::DIR);
 define("__RIPPLE_VENDOR_PATH", dirname((new ReflectionClass(ClassLoader::class))->getFileName()));
 define("__RIPPLE_PKG_PATH", dirname(__RIPPLE_VENDOR_PATH));
-
-gc_disable();
 
 Runtime::init();
 
