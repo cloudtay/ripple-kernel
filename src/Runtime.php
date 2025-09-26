@@ -52,14 +52,8 @@ final class Runtime
     /** 是否启用调试输出 */
     public static bool $DEBUG = false;
 
-    /** 静态链接库 */
-    public static bool $XXX = false;
-
     /** 全局运行时协程实例 */
     private static MainCoroutine $runtimeMain;
-
-    /** 事件桥 */
-    private static Bridge $bridge;
 
     /** 事件监听器 */
     private static WatchAbstract $watcher;
@@ -76,10 +70,6 @@ final class Runtime
 
         self::$watcher = WatcherFactory::create();
         self::$runtimeMain = new MainCoroutine(static fn () => Scheduler::tick());
-
-        if (self::$XXX) {
-            self::$bridge = new Bridge();
-        }
 
         Event::init(self::$watcher);
         Scheduler::init();
