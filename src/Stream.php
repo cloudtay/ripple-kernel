@@ -461,6 +461,10 @@ class Stream extends BaseStream
             return 0;
         }
 
+        if ($this->writeBuf->length() > 0) {
+            $this->writeBuf->write($string);
+            return $totalLength;
+        }
 
         // 先尝试直接写入
         $directWritten = parent::write($string);
