@@ -14,6 +14,7 @@ namespace Ripple;
 
 use Closure;
 use Ripple\Runtime\Exception\CoroutineStateException;
+use Ripple\Runtime\MainCoroutine;
 use Ripple\Runtime\Scheduler;
 use Ripple\Runtime\Support\Stdin;
 use Throwable;
@@ -85,39 +86,12 @@ class Process
         }
 
         $owner = \Co\current();
+        if ($owner instanceof MainCoroutine) {
+            return self::spawn($callback);
+        }
+
         Scheduler::nextTick(static function () use ($callback, $owner) {
-            // 子进程执行
-            $pid = pcntl_fork();
-
-            if ($pid === -1 || $pid > 0) {
-                Scheduler::resume($owner, $pid);
-                return;
-            }
-
-            // 清理调度器和事件监听器
-            Scheduler::clear();
-            Runtime::watcher()->forked();
-
-            // 保存并清空 fork 回调列表
-            $forked = self::$forked;
-            self::$forked = [];
-            self::$children = [];
-
-            // 执行所有 fork 回调
-            foreach ($forked as $forkedCallback) {
-                call_user_func($forkedCallback);
-            }
-
-            // 执行用户回调
-            try {
-                $callback();
-            } catch (Throwable $e) {
-                Stdin::println($e->getMessage());
-            }
-
-            // 等待所有协程完成并退出
-            wait();
-            exit(0);
+            Scheduler::resume($owner, self::spawn($callback));
         });
 
         try {
@@ -125,6 +99,45 @@ class Process
         } catch (Throwable $e) {
             throw new RuntimeException($e->getMessage(), $e->getCode(), $e);
         }
+    }
+
+    /**
+     * @param Closure $callback
+     * @return int
+     */
+    private static function spawn(Closure $callback): int
+    {
+        // 子进程执行
+        $pid = pcntl_fork();
+
+        if ($pid === -1 || $pid > 0) {
+            return $pid;
+        }
+
+        // 清理调度器和事件监听器
+        Scheduler::clear();
+        Runtime::watcher()->forked();
+
+        // 保存并清空 fork 回调列表
+        $forked = self::$forked;
+        self::$forked = [];
+        self::$children = [];
+
+        // 执行所有 fork 回调
+        foreach ($forked as $forkedCallback) {
+            call_user_func($forkedCallback);
+        }
+
+        // 执行用户回调
+        try {
+            $callback();
+        } catch (Throwable $e) {
+            Stdin::println($e->getMessage());
+        }
+
+        // 等待所有协程完成并退出
+        wait();
+        exit(0);
     }
 
     /**

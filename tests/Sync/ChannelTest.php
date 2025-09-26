@@ -255,8 +255,6 @@ class ChannelTest extends BaseTestCase
      */
     public function testChannelFIFO(): void
     {
-
-
         $channel = new Channel(3);
         $received = [];
 
@@ -273,7 +271,7 @@ class ChannelTest extends BaseTestCase
             }
         });
 
-        Time::sleep(0.1);
+        \Co\wait();
 
         $this->assertCount(5, $received);
         $this->assertEquals("Message 1", $received[0]);

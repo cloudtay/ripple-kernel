@@ -1,4 +1,5 @@
 <?php declare(strict_types=1);
+
 /**
  * Copyright © 2024 cclilshy
  * Email: jingnigg@gmail.com
@@ -13,6 +14,8 @@
 use Ripple\Process;
 use Ripple\Time;
 
+use function Co\go;
+
 require_once __DIR__ . '/../vendor/autoload.php';
 
 
@@ -22,8 +25,24 @@ Process::forked(function () {
 
 $child = Process::fork(function () {
     \var_dump('is child');
-    Time::sleep(10);
+    Time::sleep(1);
     exit(127);
 });
 
+echo "child pid > {$child} \n";
+
 \var_dump(Process::wait($child));
+
+go(function () {
+    $child = Process::fork(function () {
+        \var_dump('is child');
+        Time::sleep(1);
+        exit(127);
+    });
+
+    echo "child pid > {$child} \n";
+
+    \var_dump(Process::wait($child));
+});
+
+\Co\wait();

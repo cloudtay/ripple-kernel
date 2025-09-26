@@ -185,7 +185,6 @@ class Channel
             return $owner->suspend();
         } catch (Throwable $e) {
             throw new RuntimeException($e->getMessage(), $e->getCode(), $e);
-
         }
     }
 

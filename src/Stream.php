@@ -253,7 +253,7 @@ class Stream extends BaseStream
         $timer = null;
         if ($timeout && $timeout >= 0) {
             $timer = Time::afterFunc($timeout, function () use ($timeout) {
-                $this->wco->isSuspended() && Scheduler::throw($this->wco, new ConnectionException('Write timeout'));
+                Scheduler::throw($this->wco, new ConnectionException('Write timeout'));
             });
         }
 

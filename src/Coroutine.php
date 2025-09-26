@@ -101,7 +101,6 @@ abstract class Coroutine
      * 暂停协程执行
      * @param mixed $value 暂停时传递的值
      * @return mixed 恢复时传入的值
-     * @throws Throwable 当协程暂停过程中发生异常时抛出
      */
     abstract public function suspend(mixed $value = null): mixed;
 

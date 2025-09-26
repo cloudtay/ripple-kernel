@@ -94,15 +94,6 @@ final class Runtime
     }
 
     /**
-     * 获取事件桥
-     * @return Bridge
-     */
-    public static function bridge(): Bridge
-    {
-        return self::$bridge;
-    }
-
-    /**
      * 运行回调并进入主循环
      * @param Closure|null $callback
      * @return void

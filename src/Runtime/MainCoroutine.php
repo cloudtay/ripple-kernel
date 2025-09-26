@@ -13,7 +13,6 @@
 namespace Ripple\Runtime;
 
 use Closure;
-use Ripple\Runtime\Exception\CoroutineStateException;
 use Ripple\Coroutine;
 use Ripple\Watch\Interface\WatchAbstract;
 use Throwable;
@@ -38,6 +37,11 @@ final class MainCoroutine extends Coroutine
     private bool $hasMessage = false;
 
     /**
+     * @var mixed
+     */
+    private mixed $suspendValue = null;
+
+    /**
      * 设置主协程为可运行状态
      * @return void
      */
@@ -52,6 +56,7 @@ final class MainCoroutine extends Coroutine
      */
     public function start(): bool
     {
+        $this->setState(Coroutine::STATE_WAITING);
         call_user_func($this->callback);
         return true;
     }
@@ -64,33 +69,44 @@ final class MainCoroutine extends Coroutine
      */
     public function suspend(mixed $value = null): mixed
     {
-        if ($this->state === Coroutine::STATE_CREATED) {
-            Scheduler::start($this);
-            return $this->result;
-        }
+        $this->suspendValue = $value;
+        try {
+            if ($this->state === Coroutine::STATE_CREATED) {
+                Scheduler::start($this);
+            } else {
+                $this->setState(Coroutine::STATE_WAITING);
+                Scheduler::tick();
+            }
 
-        if ($this->state === Coroutine::STATE_RUNNABLE) {
-            Scheduler::tick();
-            return $this->result;
-        }
+            // 结果暂存
+            $result = $this->result;
 
-        if ($this->state === Coroutine::STATE_RUNNING) {
-            Scheduler::tick();
-            return $this->result;
+            // 置空结果
+            $this->result = null;
+            $this->suspendValue = null;
+            return $result;
+        } finally {
+            $this->setState(Coroutine::STATE_RUNNING);
         }
-
-        throw new CoroutineStateException('Cannot suspend a main coroutine in the current state.');
     }
 
     /**
      * 恢复主协程执行
      * @param ?mixed $value 恢复时传入的值
      * @return bool 恢复是否成功
+     * @throws Throwable
      */
-    public function resume(mixed $value = null): bool
+    public function resume(mixed $value = null): mixed
     {
         $this->hasMessage = true;
         $this->result = $value;
+
+        $owner = \Co\current();
+        if ($owner instanceof FiberCoroutine) {
+            Scheduler::nextTick(fn () => Scheduler::resume($owner, $this->suspendValue));
+            return $owner->suspend();
+        }
+
         return true;
     }
 
@@ -98,11 +114,19 @@ final class MainCoroutine extends Coroutine
      * 向主协程抛出异常
      * @param Throwable $exception 要抛出的异常对象
      * @return bool 异常设置是否成功
+     * @throws Throwable
      */
-    public function throw(Throwable $exception): bool
+    public function throw(Throwable $exception): mixed
     {
         $this->hasMessage = true;
         $this->hasExcept = $exception;
+
+        $owner = \Co\current();
+        if ($owner instanceof FiberCoroutine) {
+            Scheduler::nextTick(fn () => Scheduler::resume($owner, $this->suspendValue));
+            return $owner->suspend();
+        }
+
         return true;
     }
 
