@@ -65,11 +65,11 @@ trait StateMachine
             return;
         }
 
-        if ($state === Coroutine::STATE_DEAD && isset($this->fiber)) {
-            if (!$this->fiber->isTerminated()) {
-                throw new CoroutineException('状态不同步');
-            }
-        }
+        //        if ($state === Coroutine::STATE_DEAD && isset($this->fiber)) {
+        //            if (!$this->fiber->isTerminated()) {
+        //                throw new CoroutineException('状态不同步');
+        //            }
+        //        }
 
         $this->state = $state;
 

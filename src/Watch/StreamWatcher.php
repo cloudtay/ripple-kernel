@@ -13,6 +13,8 @@
 namespace Ripple\Watch;
 
 use Closure;
+use Ripple\Coroutine;
+use Ripple\Runtime\Scheduler;
 use Ripple\Runtime\Support\Display;
 use Ripple\Runtime\Support\Stdin;
 use Ripple\Watch\Interface\WatchAbstract;
@@ -276,7 +278,10 @@ class StreamWatcher extends WatchAbstract
                 if (isset($this->signalWatchers[$signal])) {
                     foreach ($this->signalWatchers[$signal] as $watchId => $callback) {
                         try {
-                            $callback($watchId, $signal);
+                            //                            $callback($watchId, $signal);
+                            $coroutine = Coroutine::create($callback);
+                            $coroutine->bind($watchId, $signal);
+                            Scheduler::enqueue($coroutine);
                         } catch (Throwable $exception) {
                             Stdin::println(Display::exception($exception));
                         }
