@@ -22,12 +22,6 @@ use Ev;
 use EvLoop;
 use Throwable;
 
-use function extension_loaded;
-
-if (!extension_loaded('ev')) {
-    return;
-}
-
 /**
  * ExtEv扩展驱动
  */

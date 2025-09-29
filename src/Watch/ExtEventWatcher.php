@@ -24,10 +24,6 @@ use RuntimeException;
 
 use function extension_loaded;
 
-if (!extension_loaded('event')) {
-    return;
-}
-
 /**
  * 基于 ext-event 的事件驱动
  */
@@ -45,6 +41,18 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
      * @var array<int, Event>
      */
     private array $watchers = [];
+
+    /**
+     * 内建SIGCHLD
+     * @var Event|null
+     */
+    private ?Event $internalSigchld = null;
+
+    /**
+     * SIGCHLD
+     * @var array<int, Closure>
+     */
+    private array $sigchldWatchers = [];
 
     /**
      * 下一个监听器ID
@@ -84,14 +92,14 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
      */
     public function forked(): void
     {
-        foreach ($this->watchers as $watcher) {
-            $watcher->free();
-        }
+        $this->base->reInit();
         $this->watchers = [];
         $this->nextWatchId = 1;
 
-        $this->base->stop();
         $this->base = new EventBase();
+
+        $this->sigchldWatchers = [];
+        $this->internalSigchld = null;
     }
 
     /**
@@ -103,6 +111,10 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
             $watcher->free();
         }
         $this->watchers = [];
+        if ($this->internalSigchld) {
+            $this->internalSigchld->free();
+            $this->internalSigchld = null;
+        }
         $this->base->exit();
     }
 
@@ -203,11 +215,14 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
      */
     public function unwatch(int $watchId): void
     {
-        if (!$watcher = $this->watchers[$watchId] ?? null) {
+        if ($watcher = $this->watchers[$watchId] ?? null) {
+            $watcher->free();
+            unset($this->watchers[$watchId]);
             return;
         }
 
-        $watcher->free();
-        unset($this->watchers[$watchId]);
+        if (isset($this->sigchldWatchers[$watchId])) {
+            unset($this->sigchldWatchers[$watchId]);
+        }
     }
 }

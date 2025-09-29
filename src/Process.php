@@ -22,10 +22,9 @@ use RuntimeException;
 
 use function Co\wait;
 use function pcntl_fork;
-use function extension_loaded;
 use function call_user_func;
 use function pcntl_wait;
-use function spl_object_hash;
+use function spl_object_id;
 use function pcntl_wexitstatus;
 use function pcntl_wifexited;
 use function pcntl_wifsignaled;
@@ -45,22 +44,10 @@ use const WUNTRACED;
 class Process
 {
     /**
-     * 子进程 PID 列表
-     * @var int[]
-     */
-    private static array $children = [];
-
-    /**
-     * fork 后的回调函数列表
+     *fork后的回调函数列表
      * @var Closure[]
      */
     private static array $forked = [];
-
-    /**
-     * 信号监听器 ID
-     * @var int|null
-     */
-    private static ?int $watchId = null;
 
     /**
      * 等待子进程的协程列表
@@ -69,11 +56,23 @@ class Process
     private static array $watchers = [];
 
     /**
+     * 退出码缓存
+     * @var array<int,int>
+     */
+    private static array $exited = [];
+
+    /**
+     * 子进程信号监听器
+     * @var int|null
+     */
+    private static ?int $watchId = null;
+
+    /**
      * 创建子进程
      * 在子进程中会：
      * - 清理调度器
      * - 重置事件监听器
-     * - 执行 fork 回调
+     * - 执行fork回调
      * - 执行用户回调
      *
      * @param Closure $callback 子进程执行的回调函数
@@ -81,10 +80,6 @@ class Process
      */
     public static function fork(Closure $callback): int
     {
-        if (!extension_loaded('pcntl')) {
-            return -1;
-        }
-
         $owner = \Co\current();
         if ($owner instanceof MainCoroutine) {
             return self::spawn($callback);
@@ -111,6 +106,21 @@ class Process
         $pid = pcntl_fork();
 
         if ($pid === -1 || $pid > 0) {
+            while (true) {
+                $childId = pcntl_wait($status, WNOHANG | WUNTRACED);
+                if ($childId <= 0) {
+                    break;
+                }
+
+                if (pcntl_wifexited($status)) {
+                    $exitCode = pcntl_wexitstatus($status);
+                    self::dispatchExit($childId, $exitCode);
+                } elseif (pcntl_wifsignaled($status)) {
+                    $signal = pcntl_wtermsig($status);
+                    self::dispatchExit($childId, -$signal);
+                }
+            }
+
             return $pid;
         }
 
@@ -118,14 +128,17 @@ class Process
         Scheduler::clear();
         Runtime::watcher()->forked();
 
-        // 保存并清空 fork 回调列表
+        // 保存并清空fork回调列表
         $forked = self::$forked;
         self::$forked = [];
-        self::$children = [];
 
-        // 执行所有 fork 回调
+        // 执行所有fork回调
         foreach ($forked as $forkedCallback) {
-            call_user_func($forkedCallback);
+            try {
+                call_user_func($forkedCallback);
+            } catch (Throwable $e) {
+                Stdin::println($e->getMessage());
+            }
         }
 
         // 执行用户回调
@@ -148,7 +161,6 @@ class Process
      */
     public static function wait(int $pid): int
     {
-        // 设置信号监听器（如果还没有设置）
         if (!self::$watchId) {
             self::$watchId = Event::watchSignal(SIGCHLD, static function () {
                 while (true) {
@@ -171,36 +183,53 @@ class Process
             });
         }
 
-        $co = \Co\current();
+        if (isset(self::$exited[$pid])) {
+            $code = self::$exited[$pid];
+            unset(self::$exited[$pid]);
+            return $code;
+        }
+
+        $owner = \Co\current();
 
         // 注册等待该子进程的协程
         if (!isset(self::$watchers[$pid])) {
             self::$watchers[$pid] = [];
         }
 
-        self::$watchers[$pid][spl_object_hash($co)] = $co;
+        self::$watchers[$pid][spl_object_id($owner)] = $owner;
 
         try {
-            return $co->suspend();
-        } catch (Throwable $e) {
-            throw new RuntimeException('Child process error: ' . $e->getMessage());
-        } finally {
+            $result = $owner->suspend();
             // 清理协程注册
-            unset(self::$watchers[$pid][spl_object_hash($co)]);
+            unset(self::$watchers[$pid][spl_object_id($owner)]);
             if (empty(self::$watchers[$pid])) {
                 unset(self::$watchers[$pid]);
             }
 
-            // 如果没有等待的子进程, 清理信号监听器
             if (empty(self::$watchers)) {
                 Event::unwatch(self::$watchId);
                 self::$watchId = null;
             }
+
+            return $result;
+        } catch (Throwable $e) {
+            // 清理协程注册
+            unset(self::$watchers[$pid][spl_object_id($owner)]);
+            if (empty(self::$watchers[$pid])) {
+                unset(self::$watchers[$pid]);
+            }
+
+            if (empty(self::$watchers)) {
+                Event::unwatch(self::$watchId);
+                self::$watchId = null;
+            }
+
+            throw new RuntimeException('Child process error: ' . $e->getMessage());
         }
     }
 
     /**
-     * 注册 fork 后的回调函数
+     * 注册fork后的回调函数
      * 这些回调会在子进程中执行
      *
      * @param Closure $callback 回调函数
@@ -230,8 +259,14 @@ class Process
      */
     private static function dispatchExit(int $pid, int $exitCode): void
     {
-        foreach (self::$watchers[$pid] ?? [] as $coroutine) {
-            Scheduler::resume($coroutine, $exitCode)->resolve(CoroutineStateException::class);
+        $hasSubscribers = !empty(self::$watchers[$pid]);
+        if ($hasSubscribers) {
+            foreach (self::$watchers[$pid] as $coroutine) {
+                Scheduler::resume($coroutine, $exitCode)->resolve(CoroutineStateException::class);
+            }
+            unset(self::$watchers[$pid]);
+        } else {
+            self::$exited[$pid] = $exitCode;
         }
     }
 }
