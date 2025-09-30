@@ -423,7 +423,7 @@ class StreamWatcher extends WatchAbstract
 
         $_readStreams = $this->readStreams;
         $_writeStreams = $this->writeStreams;
-        $result = stream_select($_readStreams, $_writeStreams, $_except, $sec, $usec);
+        $result = @stream_select($_readStreams, $_writeStreams, $_except, $sec, $usec);
 
         if ($result <= 0 || $result === false) {
             return;
