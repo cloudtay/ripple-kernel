@@ -255,7 +255,7 @@ class Connection
 
         try {
             //            call_user_func($this->httpServer->onRequest, $req);
-            Scheduler::resume($this->httpServer->acquireCoroutine(), $req)->throw();
+            Scheduler::resume($this->httpServer->acquireCoroutine(), $req)->rethrow();
         } catch (ConnectionException $exception) {
             throw $exception;
         } catch (Throwable $exception) {

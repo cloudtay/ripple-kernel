@@ -15,8 +15,7 @@ namespace Ripple\Watch;
 use Closure;
 use Ripple\Coroutine;
 use Ripple\Runtime\Scheduler;
-use Ripple\Runtime\Support\Display;
-use Ripple\Runtime\Support\Stdin;
+use Ripple\Runtime\Scheduler\Outcome;
 use Ripple\Watch\Interface\WatchAbstract;
 use SplMinHeap;
 use InvalidArgumentException;
@@ -283,7 +282,7 @@ class StreamWatcher extends WatchAbstract
                             $coroutine->bind($watchId, $signal);
                             Scheduler::enqueue($coroutine);
                         } catch (Throwable $exception) {
-                            Stdin::println(Display::exception($exception));
+                            Scheduler::auditFailure(new Outcome('Event::watchSignal', null, null, $exception));
                         }
                     }
                 }
@@ -437,7 +436,7 @@ class StreamWatcher extends WatchAbstract
                     try {
                         $callback($watchId, $stream);
                     } catch (Throwable $exception) {
-                        Stdin::println(Display::exception($exception));
+                        Scheduler::auditFailure(new Outcome('Event::watchRead', null, null, $exception));
                     }
                 }
             }
@@ -451,7 +450,7 @@ class StreamWatcher extends WatchAbstract
                     try {
                         $callback($watchId, $stream);
                     } catch (Throwable $exception) {
-                        Stdin::println(Display::exception($exception));
+                        Scheduler::auditFailure(new Outcome('Event::watchWrite', null, null, $exception));
                     }
                 }
             }
@@ -519,7 +518,7 @@ class StreamWatcher extends WatchAbstract
             try {
                 $data['callback']($watchId);
             } catch (Throwable $exception) {
-                Stdin::println(Display::exception($exception));
+                Scheduler::auditFailure(new Outcome('Event::timer', null, null, $exception));
             }
 
             // 降低漂移

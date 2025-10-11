@@ -19,7 +19,7 @@ use Ripple\Runtime;
 use Ripple\Runtime\Exception\CoroutineStateException;
 use Ripple\Runtime\Exception\TerminateException;
 use Ripple\Coroutine;
-use Ripple\Runtime\Scheduler\ControlResult;
+use Ripple\Runtime\Scheduler\Outcome;
 use Ripple\Runtime\Support\Display;
 use Ripple\Runtime\Support\Stdin;
 use SplObjectStorage;
@@ -51,9 +51,9 @@ final class Scheduler
 
     /**
      * 异常控制结果队列
-     * @var ControlResult[]
+     * @var Outcome[]
      */
-    private static array $excepts = [];
+    private static array $unresolvedErrors = [];
 
     /**
      * 下一个事件循环中需要执行的回调队列
@@ -164,25 +164,29 @@ final class Scheduler
             }
         }
 
-        while ($report = array_shift(self::$excepts)) {
-            if ($report->isResolve()) {
+        $unresolve = false;
+        while ($report = array_shift(self::$unresolvedErrors)) {
+            if ($report->isResolved()) {
                 continue;
             }
 
-            $previous = $report->exception();
+            $unresolve = true;
+            $exception = $report->exception();
 
-            Stdin::println("When self::{$report->action()} is executed, the internal Coroutine throws an unresolved exception:");
-            Stdin::print(Display::exception($previous));
+            Stdin::println("When Scheduler::{$report->action()} is executed, the internal Coroutine throws an unresolved exception:");
+            Stdin::print(Display::exception($exception));
+
+            if ($coroutine = $report->coroutine()) {
+                Stdin::println(str_repeat('-', 60));
+                Stdin::println("An uncaught exception occurs within the coroutine:");
+                Stdin::print(Display::traces($coroutine->debugTrace()));
+            }
 
             Stdin::println(str_repeat('-', 60));
-
-            Stdin::println("An uncaught exception occurs within the coroutine:");
-            Stdin::print(Display::traces($report->coroutine()->debugTrace()));
-
-            Stdin::println(str_repeat('-', 60));
-
-            Stdin::print(Display::trace($report->debugTrace()));
+            Stdin::print(Display::trace($report->trace()));
         }
+
+        $unresolve && exit(1);
     }
 
     /**
@@ -227,12 +231,12 @@ final class Scheduler
 
     /**
      * 报告异常控制结果
-     * @param ControlResult $controlException 异常控制结果
-     * @return ControlResult 返回传入的异常控制结果
+     * @param Outcome $controlException 异常控制结果
+     * @return Outcome 返回传入的异常控制结果
      */
-    public static function reportException(ControlResult $controlException): ControlResult
+    public static function auditFailure(Outcome $controlException): Outcome
     {
-        self::$excepts[] = $controlException;
+        self::$unresolvedErrors[] = $controlException;
         return $controlException;
     }
 
@@ -286,7 +290,7 @@ final class Scheduler
         try {
             $coroutine->start();
         } catch (Throwable $exception) {
-            new ControlResult('start', false, $coroutine, $exception);
+            new Outcome('start', false, $coroutine, $exception);
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());
@@ -299,14 +303,14 @@ final class Scheduler
      * 恢复协程
      * @param Coroutine $coroutine 要恢复的协程
      * @param ?mixed $value 恢复时传入的值
-     * @return ControlResult 控制结果, 包含恢复操作的结果和异常信息
+     * @return Outcome 控制结果, 包含恢复操作的结果和异常信息
      */
-    public static function resume(Coroutine $coroutine, mixed $value = null): ControlResult
+    public static function resume(Coroutine $coroutine, mixed $value = null): Outcome
     {
         try {
-            return new ControlResult('resume', $coroutine->resume($value), $coroutine);
+            return new Outcome('resume', $coroutine->resume($value), $coroutine);
         } catch (Throwable $exception) {
-            return new ControlResult('resume', null, $coroutine, $exception);
+            return new Outcome('resume', null, $coroutine, $exception);
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());
@@ -319,14 +323,14 @@ final class Scheduler
      * 向协程抛出异常
      * @param Coroutine $coroutine 要抛出异常的协程
      * @param Throwable $exception 要抛出的异常对象
-     * @return ControlResult 控制结果, 包含异常抛出操作的结果和异常信息
+     * @return Outcome 控制结果, 包含异常抛出操作的结果和异常信息
      */
-    public static function throw(Coroutine $coroutine, Throwable $exception): ControlResult
+    public static function throw(Coroutine $coroutine, Throwable $exception): Outcome
     {
         try {
-            return new ControlResult('throw', $coroutine->throw($exception), $coroutine);
+            return new Outcome('throw', $coroutine->throw($exception), $coroutine);
         } catch (Throwable $exception) {
-            return new ControlResult('resume', null, $coroutine, $exception);
+            return new Outcome('resume', null, $coroutine, $exception);
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());
@@ -338,9 +342,9 @@ final class Scheduler
     /**
      * 终止协程
      * @param Coroutine $coroutine 要终止的协程
-     * @return ControlResult 控制结果, 包含终止操作的结果
+     * @return Outcome 控制结果, 包含终止操作的结果
      */
-    public static function terminate(Coroutine $coroutine): ControlResult
+    public static function terminate(Coroutine $coroutine): Outcome
     {
         if ($coroutine->state() === Coroutine::STATE_RUNNING) {
             $coroutine->onState(
@@ -349,7 +353,7 @@ final class Scheduler
                 prepare: true
             );
 
-            return new ControlResult('terminate', null, $coroutine);
+            return new Outcome('terminate', null, $coroutine);
         }
 
         return self::throw($coroutine, new TerminateException());

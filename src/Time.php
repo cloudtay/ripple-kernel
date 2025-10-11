@@ -39,7 +39,7 @@ class Time
         Event::timer(
             $seconds,
             0,
-            static fn () => Scheduler::resume($owner)->resolve(CoroutineStateException::class)
+            static fn () => Scheduler::resume($owner)->unwrap(CoroutineStateException::class)
         );
 
         try {

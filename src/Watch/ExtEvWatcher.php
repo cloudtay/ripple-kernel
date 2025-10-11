@@ -13,8 +13,8 @@
 namespace Ripple\Watch;
 
 use Ripple\Runtime\Interface\EventDriverInterface;
-use Ripple\Runtime\Support\Display;
-use Ripple\Runtime\Support\Stdin;
+use Ripple\Runtime\Scheduler;
+use Ripple\Runtime\Scheduler\Outcome;
 use Ripple\Watch\Interface\WatchAbstract;
 use Ripple\Watch\Interface\WatcherInterface;
 use Closure;
@@ -101,7 +101,7 @@ final class ExtEvWatcher extends WatchAbstract implements WatcherInterface, Even
             try {
                 $callback($watchId, $w->data);
             } catch (Throwable $exception) {
-                Stdin::println(Display::exception($exception));
+                Scheduler::auditFailure(new Outcome('Event::watchRead', null, null, $exception));
             }
         }, $resource);
 
@@ -120,7 +120,7 @@ final class ExtEvWatcher extends WatchAbstract implements WatcherInterface, Even
             try {
                 $callback($watchId, $w->data);
             } catch (Throwable $exception) {
-                Stdin::println(Display::exception($exception));
+                Scheduler::auditFailure(new Outcome('Event::watchWrite', null, null, $exception));
             }
         }, $resource);
 
@@ -145,7 +145,7 @@ final class ExtEvWatcher extends WatchAbstract implements WatcherInterface, Even
             try {
                 $callback($watchId);
             } catch (Throwable $exception) {
-                Stdin::println(Display::exception($exception));
+                Scheduler::auditFailure(new Outcome('Event::timer', null, null, $exception));
             }
         });
 
@@ -164,7 +164,7 @@ final class ExtEvWatcher extends WatchAbstract implements WatcherInterface, Even
             try {
                 $callback($watchId, $w->signum);
             } catch (Throwable $exception) {
-                Stdin::println(Display::exception($exception));
+                Scheduler::auditFailure(new Outcome('Event::Signal', null, null, $exception));
             }
         });
 

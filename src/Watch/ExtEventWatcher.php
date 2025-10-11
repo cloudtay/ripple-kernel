@@ -13,7 +13,8 @@
 namespace Ripple\Watch;
 
 use Ripple\Runtime\Interface\EventDriverInterface;
-use Ripple\Runtime\Support\Stdin;
+use Ripple\Runtime\Scheduler;
+use Ripple\Runtime\Scheduler\Outcome;
 use Ripple\Watch\Interface\WatchAbstract;
 use Ripple\Watch\Interface\WatcherInterface;
 use Closure;
@@ -129,7 +130,7 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
             try {
                 $callback($watchId, $fd);
             } catch (Throwable $exception) {
-                Stdin::println($exception->getMessage());
+                Scheduler::auditFailure(new Outcome('Event::watchRead', null, null, $exception));
             }
         });
 
@@ -149,7 +150,7 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
             try {
                 $callback($watchId, $fd);
             } catch (Throwable $exception) {
-                Stdin::println($exception->getMessage());
+                Scheduler::auditFailure(new Outcome('Event::watchWrite', null, null, $exception));
             }
         });
 
@@ -169,7 +170,7 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
             try {
                 $callback($signal, $watchId);
             } catch (Throwable $exception) {
-                Stdin::println($exception->getMessage());
+                Scheduler::auditFailure(new Outcome('Event::watchSignal', null, null, $exception));
             }
         });
 
@@ -201,7 +202,7 @@ final class ExtEventWatcher extends WatchAbstract implements WatcherInterface, E
             try {
                 $callback($watchId);
             } catch (Throwable $exception) {
-                Stdin::println($exception->getMessage());
+                Scheduler::auditFailure(new Outcome('Event::timer', null, null, $exception));
             }
         });
 

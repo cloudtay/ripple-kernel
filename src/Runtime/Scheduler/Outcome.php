@@ -18,33 +18,33 @@ use Throwable;
 
 use function debug_backtrace;
 
-class ControlResult
+class Outcome
 {
     /**
      * @var bool
      */
-    private bool $resolve = false;
+    private bool $resolved = false;
 
     /**
      * @var array
      */
-    private array $debugTrace = [];
+    private array $trace = [];
 
     /**
      * @param string $action
      * @param mixed $value
-     * @param Coroutine $coroutine
+     * @param ?Coroutine $coroutine
      * @param Throwable|null $exception
      */
     public function __construct(
         private readonly string     $action,
         private readonly mixed      $value,
-        private readonly Coroutine  $coroutine,
+        private readonly ?Coroutine $coroutine,
         private readonly ?Throwable $exception = null
     ) {
         if ($exception) {
-            Scheduler::reportException($this);
-            $this->debugTrace = debug_backtrace();
+            Scheduler::auditFailure($this);
+            $this->trace = debug_backtrace();
         }
     }
 
@@ -67,9 +67,9 @@ class ControlResult
     /**
      * @return bool
      */
-    public function isResolve(): bool
+    public function isResolved(): bool
     {
-        return $this->resolve;
+        return $this->resolved;
     }
 
     /**
@@ -99,15 +99,15 @@ class ControlResult
     /**
      * @return array
      */
-    public function debugTrace(): array
+    public function trace(): array
     {
-        return $this->debugTrace;
+        return $this->trace;
     }
 
     /**
-     * @return Coroutine
+     * @return ?Coroutine
      */
-    public function coroutine(): Coroutine
+    public function coroutine(): ?Coroutine
     {
         return $this->coroutine;
     }
@@ -116,11 +116,11 @@ class ControlResult
      * @param string|null $type
      * @return mixed
      */
-    public function resolve(?string $type = null): mixed
+    public function unwrap(?string $type = null): mixed
     {
         if ($this->exception) {
             if (!$type || $this->exception instanceof $type) {
-                $this->resolve = true;
+                $this->resolved = true;
             }
             return $this->exception;
         }
@@ -132,10 +132,32 @@ class ControlResult
      * @return void
      * @throws Throwable
      */
-    public function throw(): void
+    public function rethrow(): void
     {
         if ($this->exception) {
-            throw $this->resolve();
+            throw $this->unwrap();
         }
+    }
+
+    /**
+     * @param string $action
+     * @param mixed $value
+     * @param Coroutine|null $coro
+     * @return self
+     */
+    public static function success(string $action, mixed $value, ?Coroutine $coro = null): self
+    {
+        return new self($action, $value, $coro, null);
+    }
+
+    /**
+     * @param string $action
+     * @param Throwable $e
+     * @param Coroutine|null $coro
+     * @return self
+     */
+    public static function failure(string $action, Throwable $e, ?Coroutine $coro = null): self
+    {
+        return new self($action, null, $coro, $e);
     }
 }

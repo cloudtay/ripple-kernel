@@ -262,7 +262,7 @@ class Process
         $hasSubscribers = !empty(self::$watchers[$pid]);
         if ($hasSubscribers) {
             foreach (self::$watchers[$pid] as $coroutine) {
-                Scheduler::resume($coroutine, $exitCode)->resolve(CoroutineStateException::class);
+                Scheduler::resume($coroutine, $exitCode)->unwrap(CoroutineStateException::class);
             }
             unset(self::$watchers[$pid]);
         } else {

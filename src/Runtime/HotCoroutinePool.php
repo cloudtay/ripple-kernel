@@ -96,7 +96,7 @@ final class HotCoroutinePool
     {
         while (!$this->isEmpty()) {
             $coroutine = $this->acquire();
-            Scheduler::terminate($coroutine)->resolve();
+            Scheduler::terminate($coroutine)->unwrap();
         }
 
         $this->coroutines = new SplQueue();

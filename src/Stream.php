@@ -243,10 +243,10 @@ class Stream extends BaseStream
 
                 $this->flushOnce();
                 if ($this->writeBuf->isEmpty()) {
-                    Scheduler::resume($this->wco)->resolve(CoroutineStateException::class);
+                    Scheduler::resume($this->wco)->unwrap(CoroutineStateException::class);
                 }
             } catch (Throwable $exception) {
-                Scheduler::throw($this->wco, $exception)->resolve(CoroutineStateException::class);
+                Scheduler::throw($this->wco, $exception)->unwrap(CoroutineStateException::class);
             }
         });
 
@@ -342,7 +342,7 @@ class Stream extends BaseStream
 
         if ($this->wco) {
             Scheduler::throw($this->wco, new ConnectionException('Stream is closed or disconnected'))
-                ->resolve(CoroutineStateException::class);
+                ->unwrap(CoroutineStateException::class);
         }
     }
 
