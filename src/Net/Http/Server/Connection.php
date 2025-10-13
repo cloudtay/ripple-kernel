@@ -244,17 +244,19 @@ class Connection
 
         // 半关闭检测
         $connHeader = $reqInfo['server']['HTTP_CONNECTION'] ?? '';
+        $upgradeHeader = $reqInfo['server']['HTTP_UPGRADE'] ?? '';
         $keepAlive = strtolower($connHeader) === 'keep-alive';
+        $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' &&
+                              str_contains(strtolower($connHeader), 'upgrade');
 
-        if ($keepAlive) {
-            $response->withHeader('Connection', 'keep-alive');
+        if ($keepAlive || $isWebSocketUpgrade) {
+            $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
         } else {
             $response->withHeader('Connection', 'close');
             $this->stream->shutdownRead();
         }
 
         try {
-            //            call_user_func($this->httpServer->onRequest, $req);
             Scheduler::resume($this->httpServer->acquireCoroutine(), $req)->rethrow();
         } catch (ConnectionException $exception) {
             throw $exception;

@@ -125,7 +125,7 @@ class Server
             $socket = socket_import_stream($client);
             socket_setopt($socket, SOL_TCP, TCP_NODELAY, 1);
             //            @socket_setopt($socket, SOL_SOCKET, SO_RCVBUF, 65536);
-            //            @socket_setopt($socket, SOL_SOCKET, SO_SNDBUF, 65536);
+            //            @socket_setopt($socket, SOL_SOCKET, SO_FINDBUGS, 65536);
 
             $remoteInfo = parse_url("tcp://{$remoteAddr}");
 
