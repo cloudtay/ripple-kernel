@@ -14,6 +14,7 @@ namespace Ripple\Net\Http\Server;
 
 use Closure;
 use Generator;
+use Ripple\Net\Http\Trait\ClientResponse;
 use Ripple\Runtime\Scheduler;
 use Ripple\Stream\Exception\ConnectionException;
 use Ripple\Stream;
@@ -28,12 +29,15 @@ use function strlen;
 use function strval;
 use function array_key_exists;
 use function is_int;
+use function is_file;
 
 /**
  * response entity
  */
 class Response
 {
+    use ClientResponse;
+
     /*** @var mixed|Stream */
     protected mixed $body;
 
@@ -128,10 +132,10 @@ class Response
 
                             // 文件末尾 && 缓冲区空
                             if ($this->body->eof() && $stream->writeBuffer()->length() === 0) {
-                                Scheduler::resume($owner);
+                                Scheduler::tryResume($owner);
                             }
                         } catch (Throwable) {
-                            Scheduler::resume($owner);
+                            Scheduler::tryResume($owner);
                         }
                     });
 
@@ -245,7 +249,7 @@ class Response
             $this->withHeader('Content-Length', strval(strlen($content)));
         } elseif ($content instanceof Stream) {
             $path = $content->getMetadata('uri');
-            if (is_string($path) && $path !== '' && @filesize($path) !== false) {
+            if (is_string($path) && $path !== '' && is_file($path)) {
                 $length = filesize($path);
                 $this->withHeader('Content-Length', strval($length));
             }
@@ -268,6 +272,15 @@ class Response
     {
         unset($this->headers[$name]);
         return $this;
+    }
+
+    /**
+     * 获取响应体内容
+     * @return mixed
+     */
+    public function body(): mixed
+    {
+        return $this->body;
     }
 
     /**

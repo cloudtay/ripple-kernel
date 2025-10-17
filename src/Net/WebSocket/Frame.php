@@ -267,7 +267,7 @@ class Frame
      * 获取操作码
      * @return Opcode
      */
-    public function getOpcode(): Opcode
+    public function opcode(): Opcode
     {
         return $this->opcode;
     }
@@ -276,7 +276,7 @@ class Frame
      * 获取负载数据
      * @return string
      */
-    public function getPayload(): string
+    public function payload(): string
     {
         return $this->payload;
     }

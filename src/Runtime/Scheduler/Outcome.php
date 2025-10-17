@@ -143,21 +143,21 @@ class Outcome
      * @param string $action
      * @param mixed $value
      * @param Coroutine|null $coro
-     * @return self
+     * @return static
      */
-    public static function success(string $action, mixed $value, ?Coroutine $coro = null): self
+    public static function success(string $action, mixed $value, ?Coroutine $coro = null): static
     {
-        return new self($action, $value, $coro, null);
+        return new static($action, $value, $coro, null);
     }
 
     /**
      * @param string $action
      * @param Throwable $e
      * @param Coroutine|null $coro
-     * @return self
+     * @return static
      */
-    public static function failure(string $action, Throwable $e, ?Coroutine $coro = null): self
+    public static function failure(string $action, Throwable $e, ?Coroutine $coro = null): static
     {
-        return new self($action, null, $coro, $e);
+        return new static($action, null, $coro, $e);
     }
 }
