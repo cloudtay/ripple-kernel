@@ -5,8 +5,10 @@ ripple-kernel.iml
 /debug/
 /logs/
 /vendor/
+*.md
 
 composer.lock
 
 .php-cs-fixer.cache
 .phpunit*
+!README.md

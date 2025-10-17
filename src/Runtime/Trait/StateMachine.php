@@ -14,7 +14,6 @@ namespace Ripple\Runtime\Trait;
 
 use Closure;
 use Ripple\Coroutine;
-use Ripple\Runtime\Exception\CoroutineException;
 
 use function array_pop;
 use function array_reverse;

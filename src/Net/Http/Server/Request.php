@@ -12,6 +12,7 @@
 
 namespace Ripple\Net\Http\Server;
 
+use Ripple\Net\Http\Trait\ClientRequest;
 use Ripple\Stream\Exception\ConnectionException;
 
 use function array_merge;
@@ -23,6 +24,8 @@ use function json_encode;
  */
 class Request
 {
+    use ClientRequest;
+
     /*** @var array */
     public readonly array $REQUEST;
 
@@ -31,7 +34,7 @@ class Request
 
     /**
      * 构造请求实体
-     * @param Connection $conn
+     * @param ?Connection $conn
      * @param array $GET
      * @param array $POST
      * @param array $COOKIE
@@ -40,7 +43,7 @@ class Request
      * @param mixed|null $CONTENT
      */
     public function __construct(
-        public readonly Connection $conn,
+        public readonly ?Connection $conn = null,
         public readonly array      $GET = [],
         public readonly array      $POST = [],
         public readonly array      $COOKIE = [],

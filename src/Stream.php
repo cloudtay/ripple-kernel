@@ -253,7 +253,8 @@ class Stream extends BaseStream
         $timer = null;
         if ($timeout && $timeout >= 0) {
             $timer = Time::afterFunc($timeout, function () use ($timeout) {
-                Scheduler::throw($this->wco, new ConnectionException('Write timeout'));
+                Scheduler::throw($this->wco, new ConnectionException('Write timeout'))
+                    ->unwrap(CoroutineStateException::class);
             });
         }
 
@@ -387,11 +388,11 @@ class Stream extends BaseStream
 
                     if ($handshakeResult === true) {
                         $this->unwatchRead();
-                        Scheduler::resume($owner);
+                        Scheduler::resume($owner)->unwrap(CoroutineStateException::class);
                     }
                 } catch (Throwable $exception) {
                     $this->close();
-                    Scheduler::throw($owner, $exception);
+                    Scheduler::throw($owner, $exception)->unwrap(CoroutineStateException::class);
                 }
             });
         }
@@ -688,24 +689,27 @@ class Stream extends BaseStream
     public static function connect(string $address, int|float $timeout = 0, mixed $context = null): Stream
     {
         $address = str_replace('ssl://', 'tcp://', $address);
-        $connection = stream_socket_client(
+
+        // 使用@抑制警告，然后检查错误信息
+        $connection = @stream_socket_client(
             $address,
-            $_,
-            $_,
+            $errCode,
+            $errMsg,
             $timeout,
             STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT,
             $context
         );
 
         if (!$connection) {
-            throw new ConnectionException('Failed to connect to the server.');
+            $message = $errMsg ? "Connection failed: $errMsg (errno: $errCode)" : 'Failed to connect to the server.';
+            throw new ConnectionException($message);
         }
 
         $stream = new static($connection);
 
         try {
             $owner = \Co\current();
-            $stream->watchWrite(static fn () => Scheduler::resume($owner));
+            $stream->watchWrite(static fn () => Scheduler::resume($owner)->unwrap(CoroutineStateException::class));
             $owner->suspend();
             return $stream;
         } catch (Throwable $e) {

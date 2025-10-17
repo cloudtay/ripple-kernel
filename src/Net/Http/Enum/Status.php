@@ -85,7 +85,7 @@ enum Status: int
      * 获取状态码对应的消息
      * @return string
      */
-    public function getMessage(): string
+    public function message(): string
     {
         return match ($this) {
             self::CONTINUE                        => 'Continue',
@@ -159,8 +159,8 @@ enum Status: int
      * @param int $code 状态代码
      * @return string|null 状态消息
      */
-    public static function getMessageForCode(int $code): string|null
+    public static function messageForCode(int $code): string|null
     {
-        return Status::tryFrom($code)?->getMessage();
+        return Status::tryFrom($code)?->message();
     }
 }

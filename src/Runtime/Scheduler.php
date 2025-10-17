@@ -320,6 +320,30 @@ final class Scheduler
     }
 
     /**
+     * 尝试恢复协程
+     * @param Coroutine $coroutine 要恢复的协程
+     * @param ?mixed $value 恢复时传入的值
+     * @return Outcome 控制结果, 状态错误时返回成功但值为null
+     */
+    public static function tryResume(Coroutine $coroutine, mixed $value = null): Outcome
+    {
+        if (!$coroutine->isSuspended()) {
+            return Outcome::success('tryResume', false, $coroutine);
+        }
+
+        try {
+            return new Outcome('tryResume', $coroutine->resume($value), $coroutine);
+        } catch (Throwable $exception) {
+            return new Outcome('tryResume', null, $coroutine, $exception);
+        } finally {
+            if ($coroutine->isTerminated()) {
+                Scheduler::remove($coroutine->key());
+                $coroutine->executeDefers();
+            }
+        }
+    }
+
+    /**
      * 向协程抛出异常
      * @param Coroutine $coroutine 要抛出异常的协程
      * @param Throwable $exception 要抛出的异常对象
@@ -331,6 +355,30 @@ final class Scheduler
             return new Outcome('throw', $coroutine->throw($exception), $coroutine);
         } catch (Throwable $exception) {
             return new Outcome('resume', null, $coroutine, $exception);
+        } finally {
+            if ($coroutine->isTerminated()) {
+                Scheduler::remove($coroutine->key());
+                $coroutine->executeDefers();
+            }
+        }
+    }
+
+    /**
+     * 尝试向协程抛出异常
+     * @param Coroutine $coroutine 要抛出异常的协程
+     * @param Throwable $exception 要抛出的异常对象
+     * @return Outcome 控制结果, 状态错误时返回成功但值为null
+     */
+    public static function tryThrow(Coroutine $coroutine, Throwable $exception): Outcome
+    {
+        if (!$coroutine->isSuspended()) {
+            return Outcome::success('tryThrow', false, $coroutine);
+        }
+
+        try {
+            return new Outcome('tryThrow', $coroutine->throw($exception), $coroutine);
+        } catch (Throwable $exception) {
+            return new Outcome('tryThrow', null, $coroutine, $exception);
         } finally {
             if ($coroutine->isTerminated()) {
                 Scheduler::remove($coroutine->key());

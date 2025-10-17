@@ -64,6 +64,11 @@ class Connection
     private string $buffer = '';
 
     /**
+     * @var mixed|null
+     */
+    public mixed $context = null;
+
+    /**
      * 构造函数
      * @param Stream $stream HTTP 连接
      * @param Request $request 原始 HTTP 请求
@@ -147,18 +152,18 @@ class Connection
      */
     private function handleFrame(Frame $frame): void
     {
-        switch ($frame->getOpcode()) {
+        switch ($frame->opcode()) {
             case Opcode::TEXT:
             case Opcode::BINARY:
                 if (isset($this->onMessage)) {
                     $handler = $this->onMessage;
-                    $payload = $frame->getPayload();
+                    $payload = $frame->payload();
                     go(fn () => $handler($payload, $this));
                 }
                 break;
 
             case Opcode::PING:
-                $this->sendPong($frame->getPayload());
+                $this->sendPong($frame->payload());
                 break;
 
             case Opcode::PONG:
@@ -312,7 +317,7 @@ class Connection
      * 获取连接 ID
      * @return int
      */
-    public function getId(): int
+    public function id(): int
     {
         return spl_object_id($this);
     }
@@ -321,7 +326,7 @@ class Connection
      * 获取远程地址
      * @return string
      */
-    public function getRemoteAddress(): string
+    public function remoteAddress(): string
     {
         return 'websocket-connection';
     }
