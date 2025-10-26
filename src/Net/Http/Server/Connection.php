@@ -245,15 +245,13 @@ class Connection
         // 半关闭检测
         $connHeader = $reqInfo['server']['HTTP_CONNECTION'] ?? '';
         $upgradeHeader = $reqInfo['server']['HTTP_UPGRADE'] ?? '';
-        $keepAlive = strtolower($connHeader) === 'keep-alive';
-        $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' &&
-                              str_contains(strtolower($connHeader), 'upgrade');
+        $keepAlive = strtolower($connHeader) !== 'close';
+        $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' && str_contains(strtolower($connHeader), 'upgrade');
 
         if ($keepAlive || $isWebSocketUpgrade) {
             $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
         } else {
             $response->withHeader('Connection', 'close');
-            $this->stream->shutdownRead();
         }
 
         try {
@@ -263,6 +261,8 @@ class Connection
         } catch (Throwable $exception) {
             $req->respond($exception->getMessage(), [], 500);
             $this->reset();
+        } finally {
+            ($keepAlive || $isWebSocketUpgrade) || $this->disconnect();
         }
     }
 

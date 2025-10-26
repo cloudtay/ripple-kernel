@@ -80,9 +80,16 @@ class Server
             return null;
         }
 
+        if (!$this->performHandshake($request)) {
+            $request->respond('Bad Request', [], 400);
+            return null;
+        }
+
+        $connection = new Connection($request->conn->stream, $request);
+
         if (isset($this->onRequest)) {
             try {
-                $result = ($this->onRequest)($request);
+                $result = ($this->onRequest)($request, $connection);
                 if ($result === false) {
                     $request->respond('Forbidden', [], 403);
                     return null;
@@ -92,13 +99,6 @@ class Server
                 return null;
             }
         }
-
-        if (!$this->performHandshake($request)) {
-            $request->respond('Bad Request', [], 400);
-            return null;
-        }
-
-        $connection = new Connection($request->conn->stream, $request);
 
         if (isset($this->onConnect)) {
             $handler = $this->onConnect;
