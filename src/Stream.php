@@ -690,7 +690,7 @@ class Stream extends BaseStream
     {
         $address = str_replace('ssl://', 'tcp://', $address);
 
-        // 使用@抑制警告，然后检查错误信息
+        // 使用@抑制警告, 然后检查错误信息
         $connection = @stream_socket_client(
             $address,
             $errCode,

@@ -182,22 +182,22 @@ class Connection
                 try {
                     $content = $this->stream->read(8192);
                     if ($content === '' && $this->stream->eof()) {
-                        $this->disconnect();
-                        return;
+                        throw new ConnectionException();
                     }
 
                     foreach ($this->processData($content) as $reqInfo) {
                         $this->onRequest($reqInfo);
                     }
-                } catch (ConnectionException) {
-                    $this->disconnect();
                 } catch (Throwable $err) {
-                    Stdin::println($err->getMessage());
-                    $this->disconnect();
+                    if (!$err instanceof ConnectionException) {
+                        Stdin::println($err->getMessage());
+                    }
+
+                    $this->stream->close();
                 }
             });
         } catch (ConnectionException) {
-            $this->disconnect();
+            $this->stream->close();
         }
     }
 
@@ -207,14 +207,6 @@ class Connection
     public function isAlive(): bool
     {
         return !$this->stream->isClosed();
-    }
-
-    /**
-     * @return void
-     */
-    public function disconnect(): void
-    {
-        $this->stream->close();
     }
 
     /**
@@ -261,8 +253,6 @@ class Connection
         } catch (Throwable $exception) {
             $req->respond($exception->getMessage(), [], 500);
             $this->reset();
-        } finally {
-            ($keepAlive || $isWebSocketUpgrade) || $this->disconnect();
         }
     }
 

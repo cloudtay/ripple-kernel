@@ -30,6 +30,7 @@ use function strval;
 use function array_key_exists;
 use function is_int;
 use function is_file;
+use function strtolower;
 
 /**
  * response entity
@@ -151,6 +152,13 @@ class Response
             } else {
                 throw new ConnectionException('The response content is illegal.');
             }
+        }
+
+        $connectionHeader = $this->headers['Connection'] ?? '';
+        $connectionValue = strtolower($connectionHeader);
+
+        if ($connectionValue === 'close') {
+            $stream->close();
         }
     }
 
