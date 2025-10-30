@@ -10,7 +10,7 @@
  * Contributions, suggestions, and feedback are always welcome!
  */
 
-namespace Ripple\Net\Http\Server;
+namespace Ripple\Net\Http;
 
 use Closure;
 use Generator;
@@ -31,6 +31,7 @@ use function array_key_exists;
 use function is_int;
 use function is_file;
 use function strtolower;
+use function is_callable;
 
 /**
  * response entity
@@ -39,7 +40,7 @@ class Response
 {
     use ClientResponse;
 
-    /*** @var mixed|Stream */
+    /*** @var mixed|Stream|Generator|string */
     protected mixed $body;
 
     /*** @var array */
@@ -54,6 +55,14 @@ class Response
     /*** @var string */
     protected string $statusText = 'OK';
 
+    /*** @var bool 响应体发送完成后是否关闭连接 */
+    protected bool $closeAfterBody = false;
+
+    /**
+     * @var Stream|null
+     */
+    protected ?Stream $stream = null;
+
     /**
      */
     public function __construct()
@@ -61,11 +70,19 @@ class Response
     }
 
     /**
-     * @param Stream $stream
      * @return void
      * @throws ConnectionException
      */
-    public function __invoke(Stream $stream): void
+    public function __invoke(): void
+    {
+        $this->send();
+    }
+
+    /**
+     * @return void
+     * @throws ConnectionException
+     */
+    public function send(): void
     {
         // respond header
         $header = "HTTP/1.1 {$this->statusCode()} {$this->statusText}\r\n";
@@ -82,14 +99,19 @@ class Response
             $header .= 'Set-Cookie: ' . $cookieLine . "\r\n";
         }
 
+        // respond body
+        if (is_callable($this->body)) {
+            $this->body = ($this->body)($this->stream);
+        }
+
         if (is_string($this->body)) {
-            $stream->writeAll("{$header}\r\n{$this->body}");
+            $this->stream->writeAll("{$header}\r\n{$this->body}");
         } else {
-            $stream->writeAll("{$header}\r\n");
+            $this->stream->writeAll("{$header}\r\n");
 
             // 普通文本
             if (is_string($this->body)) {
-                $stream->writeAll($this->body);
+                $this->stream->writeAll($this->body);
             }
 
             // 可控流式传输方式
@@ -98,7 +120,12 @@ class Response
                     if (!is_string($content) || $content === '') {
                         continue;
                     }
-                    $stream->writeAll($content);
+
+                    try {
+                        $this->stream->writeAll($content);
+                    } catch (Throwable) {
+                        break;
+                    }
                 }
             }
 
@@ -106,14 +133,14 @@ class Response
             elseif ($this->body instanceof Stream) {
                 try {
                     $owner = \Co\current();
-                    $stream->setWriteBufferMax(10485760);
-                    $stream->watchWrite(function () use ($owner, $stream) {
+                    $this->stream->setWriteBufferMax(10485760);
+                    $this->stream->watchWrite(function () use ($owner) {
                         try {
-                            $bufferLen = $stream->writeBuffer()->length();
+                            $bufferLen = $this->stream->writeBuffer()->length();
 
                             // 阈值检查
                             if ($bufferLen > 10405760) {
-                                $stream->flushOnce();
+                                $this->stream->flushOnce();
                                 return;
                             }
 
@@ -121,7 +148,7 @@ class Response
                             if (!$this->body->isClosed()) {
                                 $buf = $this->body->read(8192);
                                 if ($buf) {
-                                    $stream->writeAsync($buf);
+                                    $this->stream->writeAsync($buf);
                                 }
 
                                 if ($this->body->eof()) {
@@ -129,10 +156,10 @@ class Response
                                 }
                             }
 
-                            $stream->flushOnce();
+                            $this->stream->flushOnce();
 
                             // 文件末尾 && 缓冲区空
-                            if ($this->body->eof() && $stream->writeBuffer()->length() === 0) {
+                            if ($this->body->eof() && $this->stream->writeBuffer()->length() === 0) {
                                 Scheduler::tryResume($owner);
                             }
                         } catch (Throwable) {
@@ -147,7 +174,7 @@ class Response
                     throw new ConnectionException($exception->getMessage(), $exception->getCode(), $exception);
                 } finally {
                     $this->body->close();
-                    $stream->unwatchWrite();
+                    $this->stream->unwatchWrite();
                 }
             } else {
                 throw new ConnectionException('The response content is illegal.');
@@ -157,8 +184,8 @@ class Response
         $connectionHeader = $this->headers['Connection'] ?? '';
         $connectionValue = strtolower($connectionHeader);
 
-        if ($connectionValue === 'close') {
-            $stream->close();
+        if ($connectionValue === 'close' || $this->closeAfterBody) {
+            $this->stream->close();
         }
     }
 
@@ -273,12 +300,32 @@ class Response
     }
 
     /**
+     * @param Stream $stream
+     * @return $this
+     */
+    public function withStream(Stream $stream): static
+    {
+        $this->stream = $stream;
+        return $this;
+    }
+
+    /**
      * @param string $name
      * @return $this
      */
     public function removeHeader(string $name): static
     {
         unset($this->headers[$name]);
+        return $this;
+    }
+
+    /**
+     * 响应体发送完成后关闭连接
+     * @return $this
+     */
+    public function closeAfter(): static
+    {
+        $this->closeAfterBody = true;
         return $this;
     }
 

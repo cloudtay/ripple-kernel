@@ -12,6 +12,7 @@
 
 namespace Ripple\Net\Http\Server;
 
+use Ripple\Net\Http\Request;
 use Ripple\Runtime\Scheduler;
 use RuntimeException;
 use Ripple\Net\Http\Enum\Method;
@@ -188,9 +189,9 @@ class Connection
                     foreach ($this->processData($content) as $reqInfo) {
                         $this->onRequest($reqInfo);
                     }
-                } catch (Throwable $err) {
-                    if (!$err instanceof ConnectionException) {
-                        Stdin::println($err->getMessage());
+                } catch (Throwable $e) {
+                    if (!$e instanceof ConnectionException) {
+                        Stdin::println($e->getMessage());
                     }
 
                     $this->stream->close();

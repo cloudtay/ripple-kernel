@@ -10,8 +10,9 @@
  * Contributions, suggestions, and feedback are always welcome!
  */
 
-namespace Ripple\Net\Http\Server;
+namespace Ripple\Net\Http;
 
+use Ripple\Net\Http\Server\Connection;
 use Ripple\Net\Http\Trait\ClientRequest;
 use Ripple\Stream\Exception\ConnectionException;
 
@@ -78,7 +79,7 @@ class Request
             $response->withHeader($name, $value);
         }
 
-        $response($this->conn->stream);
+        $response->send();
     }
 
     /**
@@ -139,7 +140,7 @@ class Request
     public function response(): Response
     {
         if (!isset($this->response)) {
-            $this->response = new Response();
+            $this->response = (new Response())->withStream($this->conn->stream);
         }
 
         return $this->response;

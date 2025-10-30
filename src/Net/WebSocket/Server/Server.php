@@ -14,7 +14,7 @@ namespace Ripple\Net\WebSocket\Server;
 
 use Closure;
 use Ripple\Net\Http\Server as HttpServer;
-use Ripple\Net\Http\Server\Request;
+use Ripple\Net\Http\Request;
 use Ripple\Stream\Exception\ConnectionException;
 use Throwable;
 

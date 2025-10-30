@@ -3,7 +3,7 @@
 namespace Ripple\Tests\Net;
 
 use Ripple\Net\Http;
-use Ripple\Net\Http\Server\Request;
+use Ripple\Net\Http\Request;
 use Ripple\Process;
 use Ripple\Tests\Runtime\BaseTestCase;
 use GuzzleHttp\Client;

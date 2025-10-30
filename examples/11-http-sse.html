@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>SSE Demo</title>
+</head>
+<body>
+    <h1>Server-Sent Events Demo</h1>
+    <p><strong>Connection Status:</strong> <span id="status">Connecting...</span></p>
+    <hr>
+    <h2>Received Events:</h2>
+    <div id="messages"></div>
+
+    <script>
+        const eventSource = new EventSource('/events');
+        const messagesDiv = document.getElementById('messages');
+        const statusSpan = document.getElementById('status');
+
+        eventSource.onopen = function() {
+            statusSpan.textContent = 'Connected';
+        };
+
+        eventSource.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+            const p = document.createElement('p');
+            p.textContent = `[${data.time}] ${data.message} (ID: ${data.id})`;
+            messagesDiv.appendChild(p);
+        };
+
+        eventSource.onerror = function() {
+            statusSpan.textContent = 'Connection closed';
+            const p = document.createElement('p');
+            p.textContent = 'Connection closed or error occurred';
+            messagesDiv.appendChild(p);
+            eventSource.close();
+        };
+    </script>
+</body>
+</html>

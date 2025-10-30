@@ -13,7 +13,7 @@
 namespace Ripple\Net\Http\Trait;
 
 use Ripple\Coroutine;
-use Ripple\Net\Http\Server\Response;
+use Ripple\Net\Http\Response;
 use Ripple\Runtime\Scheduler;
 use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;

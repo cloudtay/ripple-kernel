@@ -13,8 +13,6 @@
 namespace Ripple\Net\Http;
 
 use Ripple\Net\Http\Exception\TimeoutException;
-use Ripple\Net\Http\Server\Request;
-use Ripple\Net\Http\Server\Response;
 use Ripple\Net\Http\Trait\ClientRequest;
 use Ripple\Runtime\Scheduler;
 use Ripple\Stream;

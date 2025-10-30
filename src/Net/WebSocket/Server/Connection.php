@@ -13,7 +13,7 @@
 namespace Ripple\Net\WebSocket\Server;
 
 use Closure;
-use Ripple\Net\Http\Server\Request;
+use Ripple\Net\Http\Request;
 use Ripple\Net\WebSocket\Enum\Opcode;
 use Ripple\Net\WebSocket\Frame;
 use Ripple\Stream;
