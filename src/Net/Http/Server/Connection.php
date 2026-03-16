@@ -45,6 +45,8 @@ use function str_starts_with;
 use function parse_url;
 use function strtr;
 use function intval;
+use function rawurldecode;
+use function trim;
 
 use const PHP_URL_PATH;
 
@@ -109,12 +111,6 @@ class Connection
     private array $files;
 
     /**
-     * 服务器环境变量数组
-     * @var array
-     */
-    private array $server;
-
-    /**
      * HTTP 请求体内容
      * @var string
      */
@@ -145,12 +141,6 @@ class Connection
     private int $contentLength;
 
     /**
-     * 服务实例引用
-     * @var Server|null
-     */
-    private ?Server $httpServer = null;
-
-    /**
      * @var mixed|string
      */
     private string $contentType;
@@ -161,23 +151,30 @@ class Connection
     private Method $method;
 
     /**
+     * @var array
+     */
+    private readonly array $alwaysMeta;
+
+    /**
      * 构造函数
      * @param Stream $stream 流对象
-     * @param array $serverInfo 服务器信息
+     * @param array $meta 服务器信息
      */
-    public function __construct(public readonly Stream $stream, private readonly array $serverInfo = [])
-    {
+    public function __construct(
+        public readonly Stream  $stream,
+        private readonly Server $server,
+        private array           $meta = []
+    ) {
+        $this->alwaysMeta = $this->meta;
         $this->reset();
     }
 
     /**
      * 启动连接处理
-     * @param Server $server 服务器实例
      * @return void
      */
-    public function start(Server $server): void
+    public function start(): void
     {
-        $this->httpServer = $server;
         try {
             $this->stream->watchRead(function () {
                 try {
@@ -186,8 +183,8 @@ class Connection
                         throw new ConnectionException();
                     }
 
-                    foreach ($this->processData($content) as $reqInfo) {
-                        $this->onRequest($reqInfo);
+                    foreach ($this->fill($content) as $req) {
+                        $this->onRequest($req);
                     }
                 } catch (Throwable $e) {
                     if (!$e instanceof ConnectionException) {
@@ -205,33 +202,19 @@ class Connection
     /**
      * @return bool
      */
-    public function isAlive(): bool
+    public function isClosed(): bool
     {
-        return !$this->stream->isClosed();
+        return $this->stream->isClosed();
     }
 
     /**
      * 处理 HTTP 请求
-     * @param array $reqInfo 请求信息
+     * @param Request $req 请求信息
      * @return void
      * @throws ConnectionException
      */
-    private function onRequest(array $reqInfo): void
+    private function onRequest(Request $req): void
     {
-        if (!$this->httpServer) {
-            return;
-        }
-
-        $req = new Request(
-            $this,
-            $reqInfo['query'],
-            $reqInfo['request'],
-            $reqInfo['cookies'],
-            $reqInfo['files'],
-            $reqInfo['server'],
-            $reqInfo['content']
-        );
-
         $response = $req->response();
         $response->withHeader('Server', 'ripple');
 
@@ -248,7 +231,7 @@ class Connection
         }
 
         try {
-            Scheduler::resume($this->httpServer->acquireCoroutine(), $req)->rethrow();
+            Scheduler::resume($this->server->acquireCoroutine(), $req)->rethrow();
         } catch (ConnectionException $exception) {
             throw $exception;
         } catch (Throwable $exception) {
@@ -269,7 +252,7 @@ class Connection
         $this->attributes       = [];
         $this->cookies          = [];
         $this->files            = [];
-        $this->server           = [];
+        $this->meta             = $this->alwaysMeta;
         $this->content          = '';
         $this->multipart        = null;
         $this->bodySize         = 0;
@@ -279,13 +262,13 @@ class Connection
     /**
      * 处理接收到的数据
      * @param string $content 接收的数据
-     * @return array 解析出的请求列表
+     * @return Request[] 解析出的请求列表
      * @throws FormatException 格式异常
      * @throws RuntimeException 运行时异常
      */
-    private function processData(string $content): array
+    private function fill(string $content): array
     {
-        $list = [];
+        $reqs = [];
 
         $this->buf .= $content;
 
@@ -302,15 +285,25 @@ class Connection
         }
 
         if ($this->step === self::STEP_COMPLETE) {
-            $list[] = $this->completeRequest();
+            $reqInfo = $this->completeRequest();
+            $reqs[] =  new Request(
+                $this,
+                $reqInfo['query'],
+                $reqInfo['request'],
+                $reqInfo['cookies'],
+                $reqInfo['files'],
+                $reqInfo['server'],
+                $reqInfo['content']
+            );
+
             if ($this->buf !== '') {
-                foreach ($this->processData('') as $item) {
-                    $list[] = $item;
+                foreach ($this->fill('') as $item) {
+                    $reqs[] = $item;
                 }
             }
         }
 
-        return $list;
+        return $reqs;
     }
 
     /**
@@ -346,24 +339,29 @@ class Connection
             $this->parseHeaders();
 
             $this->method = Method::from($base[0]);
+            $this->buf = substr($buffer, $headerEnd + 4);
 
-            $bodyStart = $headerEnd + 4;
-            $remainingBuffer = substr($buffer, $bodyStart);
-
-            if ($this->method->value === 'GET') {
-                $body = '';
-                $this->buf = $remainingBuffer;
-            } else {
-                $this->contentLength = intval($this->server['HTTP_CONTENT_LENGTH'] ?? 0);
-                $this->contentType = $this->server['HTTP_CONTENT_TYPE'] ?? '';
-                $bodyLength = max(0, $this->contentLength - $this->bodySize);
-                $body = substr($remainingBuffer, 0, $bodyLength);
-                $bodyLength = strlen($body);
-                $this->buf = substr($remainingBuffer, $bodyLength);
-                $this->bodySize += $bodyLength;
+            if (!$this->method->hasBody()) {
+                $this->step = self::STEP_COMPLETE;
+                return;
             }
 
-            $this->processRequestBody($body);
+            $this->contentLength = intval($this->meta['HTTP_CONTENT_LENGTH'] ?? 0);
+            $this->contentType = $this->meta['HTTP_CONTENT_TYPE'] ?? '';
+
+            if (str_contains($this->contentType, 'multipart/form-data')) {
+                if (!preg_match('/boundary="?([^";]+)"?/i', $this->contentType, $matches)) {
+                    throw new RuntimeException('boundary is not set');
+                }
+
+                $boundary = $matches[1];
+                $this->step = self::STEP_FILE_TRANSFER;
+                if (!isset($this->multipart)) {
+                    $this->multipart = new Multipart($boundary);
+                }
+            } else {
+                $this->step = self::STEP_CONTINUOUS;
+            }
         }
     }
 
@@ -379,7 +377,6 @@ class Connection
             $this->buf = '';
             return $buffer;
         }
-
 
         $buffer = substr($this->buf, 0, $length);
         $this->buf = substr($this->buf, $length);
@@ -400,9 +397,9 @@ class Connection
             $this->parseQuery($urlExp[1]);
         }
 
-        $this->server['REQUEST_URI']     = $path;
-        $this->server['REQUEST_METHOD']  = $base[0];
-        $this->server['SERVER_PROTOCOL'] = $base[2];
+        $this->meta['REQUEST_URI']     = $path;
+        $this->meta['REQUEST_METHOD']  = $base[0];
+        $this->meta['SERVER_PROTOCOL'] = $base[2];
     }
 
     /**
@@ -428,64 +425,12 @@ class Connection
                 $hdrValue = $param[1];
 
                 if (isset(self::COMMON_HEADERS[$hdrName])) {
-                    $this->server[self::COMMON_HEADERS[$hdrName]] = $hdrValue;
+                    $this->meta[self::COMMON_HEADERS[$hdrName]] = $hdrValue;
                 } else {
-                    $this->server['HTTP_' . strtr($hdrName, '-', '_')] = $hdrValue;
+                    $this->meta['HTTP_' . strtr($hdrName, '-', '_')] = $hdrValue;
                 }
             }
         }
-    }
-
-    /**
-     * 处理请求体
-     * @param string $body 请求体
-     * @return void
-     * @throws FormatException 格式异常
-     * @throws RuntimeException 运行时异常
-     */
-    private function processRequestBody(string $body): void
-    {
-        if (!$this->method->hasBody()) {
-            $this->step = self::STEP_COMPLETE;
-        } else {
-            $this->processPostRequest($body);
-        }
-    }
-
-    /**
-     * 处理POST请求
-     * @param string $body 请求体
-     * @return void
-     * @throws FormatException 格式异常
-     * @throws RuntimeException 运行时异常
-     */
-    private function processPostRequest(string $body): void
-    {
-        if (str_contains($this->contentType, 'multipart/form-data')) {
-            if (!preg_match('/boundary="?([^";]+)"?/i', $this->contentType, $matches)) {
-                throw new RuntimeException('boundary is not set');
-            }
-
-            $boundary = $matches[1];
-            $this->step = self::STEP_FILE_TRANSFER;
-            if (!isset($this->multipart)) {
-                $this->multipart = new Multipart($boundary);
-            }
-
-            foreach ($this->multipart->fill($body) as $name => $multipartResult) {
-                if (is_string($multipartResult)) {
-                    $this->request[$name] = $multipartResult;
-                } elseif (is_array($multipartResult)) {
-                    foreach ($multipartResult as $file) {
-                        $this->files[$name][] = $file;
-                    }
-                }
-            }
-        } else {
-            $this->content = $body;
-        }
-
-        $this->checkContentLength();
     }
 
     /**
@@ -512,8 +457,9 @@ class Connection
         if ($buffer = $this->readBuffer(max(0, $this->contentLength - $this->bodySize))) {
             $this->content .= $buffer;
             $this->bodySize += strlen($buffer);
-            $this->checkContentLength();
         }
+
+        $this->checkContentLength();
     }
 
     /**
@@ -535,8 +481,9 @@ class Connection
                     }
                 }
             }
-            $this->checkContentLength();
         }
+
+        $this->checkContentLength();
     }
 
     /**
@@ -547,7 +494,7 @@ class Connection
     {
         $this->parseCookies();
         $this->parseRequestBody();
-        $this->setUserIpInfo();
+        $this->parseXfp();
 
         $result = [
             'query'      => $this->query,
@@ -555,7 +502,7 @@ class Connection
             'attributes' => $this->attributes,
             'cookies'    => $this->cookies,
             'files'      => $this->files,
-            'server'     => $this->server,
+            'server'     => $this->meta,
             'content'    => $this->content,
         ];
 
@@ -569,8 +516,28 @@ class Connection
      */
     private function parseCookies(): void
     {
-        if (isset($this->server['HTTP_COOKIE'])) {
-            parse_str(strtr($this->server['HTTP_COOKIE'], '; ', '& '), $this->cookies);
+        $this->cookies = [];
+        if ($headerCookie = $this->meta['HTTP_COOKIE'] ?? '') {
+            $pairs = explode(';', $headerCookie);
+            foreach ($pairs as $pair) {
+                $pair = trim($pair);
+                if ($pair === '' || !str_contains($pair, '=')) {
+                    continue;
+                }
+
+                [$name, $value] = explode('=', $pair, 2);
+
+                $name  = trim($name);
+                $value = trim($value);
+
+                if ($name === '') {
+                    continue;
+                }
+
+                $name  = rawurldecode($name);
+                $value = rawurldecode($value);
+                $this->cookies[$name] = $value;
+            }
         }
     }
 
@@ -593,12 +560,12 @@ class Connection
     /**
      * 设置用户IP信息
      * @return void
+     * @deprecated
      */
-    private function setUserIpInfo(): void
+    private function parseXfp(): void
     {
-        $this->server = array_merge($this->serverInfo, $this->server);
-        if ($xfw = $this->server['HTTP_X_FORWARDED_PROTO'] ?? null) {
-            $this->server['HTTPS'] = $xfw === 'https' ? 'on' : 'off';
+        if ($xfw = $this->meta['HTTP_X_FORWARDED_PROTO'] ?? null) {
+            $this->meta['HTTPS'] = $xfw === 'https' ? 'on' : 'off';
         }
     }
 }

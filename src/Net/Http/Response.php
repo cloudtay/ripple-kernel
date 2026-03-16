@@ -27,11 +27,15 @@ use function is_resource;
 use function is_string;
 use function strlen;
 use function strval;
-use function array_key_exists;
-use function is_int;
 use function is_file;
 use function strtolower;
 use function is_callable;
+use function gmdate;
+use function is_numeric;
+use function rawurlencode;
+use function str_replace;
+use function trim;
+use function ucfirst;
 
 /**
  * response entity
@@ -228,7 +232,7 @@ class Response
 
     /**
      * @param string $statusText
-     * @return $this
+     * @return static
      */
     public function setStatusText(string $statusText): static
     {
@@ -238,7 +242,7 @@ class Response
 
     /**
      * @param int $statusCode
-     * @return $this
+     * @return static
      */
     public function setStatusCode(int $statusCode): static
     {
@@ -249,7 +253,7 @@ class Response
     /**
      * @param string $name
      * @param mixed $value
-     * @return $this
+     * @return static
      */
     public function withHeader(string $name, mixed $value): static
     {
@@ -258,15 +262,83 @@ class Response
     }
 
     /**
+     * @param string $name
+     * @param string $content
+     * @param array|null $options
+     * @return static
      */
-    public function withCookie(string $name, array $values): static
+    public function withCookie(string $name, string $content, ?array $options = []): static
     {
-        $this->cookieLines[$name] = $this->buildCookieLine($name, $values);
+        $options = $options ?? [];
+
+        $name = trim($name);
+        if ($name === '') {
+            return $this;
+        }
+
+        $value = str_replace([';', "\r", "\n", "\0"], '', rawurlencode($content));
+
+        // 开始收集所有部分
+        $parts = ["{$name}={$value}"];
+
+        // expires
+        if (isset($options['expires']) && is_numeric($options['expires'])) {
+            $exp = (int) $options['expires'];
+            if ($exp > 0) {
+                $expiresStr = gmdate('D, d M Y H:i:s \G\M\T', $exp);
+                $parts[] = "Expires={$expiresStr}";
+            }
+        }
+
+        // maxAge
+        if (isset($options['maxAge']) && is_numeric($options['maxAge'])) {
+            $maxAge = (int) $options['maxAge'];
+            $parts[] = "Max-Age={$maxAge}";
+            if ($maxAge <= 0) {
+                $parts[] = 'Expires=Thu, 01 Jan 1970 00:00:00 GMT';
+            }
+        }
+
+        // path - 默认 /
+        $path = !empty($options['path']) ? trim($options['path']) : '/';
+        $path = str_replace([';', "\r", "\n"], '', $path);
+        $parts[] = "Path={$path}";
+
+        // domain
+        if (!empty($options['domain'])) {
+            $domain = trim($options['domain'], '. ');
+            if ($domain !== '') {
+                $domain = str_replace([';', "\r", "\n"], '', $domain);
+                $parts[] = "Domain={$domain}";
+            }
+        }
+
+        // secure
+        if (!empty($options['secure'])) {
+            $parts[] = 'Secure';
+        }
+
+        // httponly
+        if (!empty($options['httponly']) || !empty($options['httpOnly'])) {
+            $parts[] = 'HttpOnly';
+        }
+
+        // samesite
+        if (!empty($options['samesite'])) {
+            $s = strtolower(trim($options['samesite']));
+            if ($s === 'strict' || $s === 'lax' || $s === 'none') {
+                $s = ucfirst($s);
+                $parts[] = "SameSite={$s}";
+            }
+        }
+
+        $this->cookieLines[] = implode('; ', $parts);
         return $this;
     }
 
     /**
-     * @return $this
+     * @param string $cookieLine
+     * @return static
      */
     public function withCookieLine(string $cookieLine): static
     {
@@ -301,7 +373,7 @@ class Response
 
     /**
      * @param Stream $stream
-     * @return $this
+     * @return static
      */
     public function withStream(Stream $stream): static
     {
@@ -311,7 +383,7 @@ class Response
 
     /**
      * @param string $name
-     * @return $this
+     * @return static
      */
     public function removeHeader(string $name): static
     {
@@ -321,7 +393,7 @@ class Response
 
     /**
      * 响应体发送完成后关闭连接
-     * @return $this
+     * @return static
      */
     public function closeAfter(): static
     {
@@ -336,45 +408,5 @@ class Response
     public function body(): mixed
     {
         return $this->body;
-    }
-
-    /**
-     * @param string $name
-     * @param array $values
-     * @return string
-     */
-    private function buildCookieLine(string $name, array $values): string
-    {
-        $segments = [];
-
-        $mainValue = $values[$name] ?? $values['value'] ?? null;
-        if (array_key_exists($name, $values)) {
-            unset($values[$name]);
-        }
-
-        if ($mainValue !== null) {
-            $segments[] = $name . '=' . $mainValue;
-        } else {
-            $segments[] = $name;
-        }
-
-        foreach ($values as $k => $v) {
-            if (is_int($k)) {
-                if ($v !== null && $v !== false && $v !== '') {
-                    $segments[] = strval($v);
-                }
-                continue;
-            }
-
-            if ($v === null || $v === true) {
-                $segments[] = $k;
-            } elseif ($v === false) {
-                continue;
-            } else {
-                $segments[] = $k . '=' . $v;
-            }
-        }
-
-        return implode('; ', $segments);
     }
 }

@@ -36,6 +36,7 @@ use function unlink;
 class Multipart
 {
     private const STATUS_WAIT = 0;
+
     private const STATUS_TRAN = 1;
 
     /**
@@ -71,26 +72,27 @@ class Multipart
     {
         $this->buffer .= $content;
         $result       = array();
+
         while (!empty($this->buffer)) {
             if ($this->status === Multipart::STATUS_WAIT) {
-                if (!$info = $this->parseFileInfo()) {
+                if (!$meta = $this->parseMeta()) {
                     break;
                 }
 
                 $this->status = Multipart::STATUS_TRAN;
 
-                if (!empty($info['fileName'])) {
-                    $info['path']   = sys_get_temp_dir() . '/' . uniqid();
-                    $info['stream'] = fopen($info['path'], 'wb+');
-                    $this->filling  = $info;
+                if (!empty($meta['fileName'])) {
+                    $meta['path']   = sys_get_temp_dir() . '/' . uniqid();
+                    $meta['stream'] = fopen($meta['path'], 'wb+');
+                    $this->filling  = $meta;
 
-                    $tmpPath = $info['path'];
+                    $tmpPath = $meta['path'];
                     defer(static fn () => file_exists($tmpPath) && @unlink($tmpPath));
                 } else {
                     $this->status = Multipart::STATUS_WAIT;
                     $textContent  = $this->parseChunk();
                     if ($textContent !== false) {
-                        $result[$info['name']] = $textContent;
+                        $result[$meta['name']] = $textContent;
                     }
                 }
             }
@@ -105,6 +107,7 @@ class Multipart
                     'fileName' => $this->filling['fileName'],
                     'contentType' => $this->filling['contentType'],
                 ];
+
                 fclose($this->filling['stream']);
             }
         }
@@ -144,7 +147,7 @@ class Multipart
      * @return array|false
      * @throws FormatException
      */
-    private function parseFileInfo(): array|false
+    private function parseMeta(): array|false
     {
         $headerEndPosition = strpos($this->buffer, "\r\n\r\n");
         if ($headerEndPosition === false) {

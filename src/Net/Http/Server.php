@@ -130,12 +130,16 @@ class Server
             $remoteInfo = parse_url("tcp://{$remoteAddr}");
 
             $stream = new Stream($client);
-            $connection = new Connection($stream, [
-                'REMOTE_ADDR' => $remoteInfo['host'] ?? '',
-                'REMOTE_PORT' => (int)($remoteInfo['port'] ?? 0),
-            ]);
+            $connection = new Connection(
+                $stream,
+                $this,
+                [
+                    'REMOTE_ADDR' => $remoteInfo['host'] ?? '',
+                    'REMOTE_PORT' => (int)($remoteInfo['port'] ?? 0),
+                ]
+            );
 
-            $connection->start($this);
+            $connection->start();
         });
     }
 
@@ -153,14 +157,6 @@ class Server
         if (is_resource($this->server)) {
             fclose($this->server);
         }
-    }
-
-    /**
-     * @return HotCoroutinePool
-     */
-    public function hotCoroutinePool(): HotCoroutinePool
-    {
-        return $this->hotCoroutinePool;
     }
 
     /**

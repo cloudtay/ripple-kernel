@@ -33,7 +33,7 @@ final class HotCoroutinePool
     /**
      * 构造函数
      * @param Closure $process 协程要执行的任务处理函数
-     * @param int $size 池的最大容量
+     * @param int $size 池的大小
      */
     public function __construct(private readonly Closure $process, private readonly int $size = 100)
     {

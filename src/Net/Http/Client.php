@@ -68,14 +68,11 @@ class Client
     ];
 
     /**
-     * @param array $config 客户端配置
+     * @param array|null $config 客户端配置
      */
-    public function __construct(array $config = [])
+    public function __construct(?array $config = [])
     {
         $this->config = array_merge($this->config, $config);
-        if (!empty($config['base_uri'])) {
-            $this->config['base_uri'] = rtrim($config['base_uri'], '/');
-        }
     }
 
     /**
