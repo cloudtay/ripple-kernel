@@ -131,7 +131,7 @@ class HttpFileTransferTest extends BaseTestCase
             $response = $this->client->request('POST', $this->testUrl . '/upload', [
                 'multipart' => [
                     [
-                        'name'     => 'file',
+                        'name'     => 'file[]',
                         'contents' => fopen($tmpFile, 'r'),
                         'filename' => basename($tmpFile),
                     ],
@@ -192,7 +192,7 @@ class HttpFileTransferTest extends BaseTestCase
             $response = $this->client->request('POST', $this->testUrl . '/upload', [
                 'multipart' => [
                     [
-                        'name'     => 'file',
+                        'name'     => 'file[]',
                         'contents' => fopen($tmpFile, 'r'),
                         'filename' => basename($tmpFile),
                     ],
@@ -274,7 +274,7 @@ class HttpFileTransferTest extends BaseTestCase
             $response = $this->client->request('POST', $this->testUrl . '/upload', [
                 'multipart' => [
                     [
-                        'name'     => 'file',
+                        'name'     => 'file[]',
                         'contents' => fopen($tmpFile, 'r'),
                         'filename' => basename($tmpFile),
                     ],

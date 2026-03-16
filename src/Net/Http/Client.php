@@ -210,13 +210,13 @@ class Client
             }
 
             $request = new Request(
-                conn: null,
                 GET: [],
                 POST: [],
                 COOKIE: [],
                 FILES: [],
                 SERVER: $serverArray,
-                CONTENT: $content
+                CONTENT: $content,
+                conn:null,
             );
 
             $stream = $this->newConn($scheme, $host, $port, $fullOptions);

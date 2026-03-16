@@ -233,7 +233,7 @@ class HttpClientTest extends BaseTestCase
                 $response = $client->post($testUrl . '/upload', [
                     'multipart' => [
                         [
-                            'name' => 'file',
+                            'name' => 'file[]',
                             'contents' => fopen($tmpFile, 'rb'),
                             'filename' => basename($tmpFile)
                         ]
@@ -293,7 +293,7 @@ class HttpClientTest extends BaseTestCase
                 $response = $client->post($testUrl . '/upload', [
                     'multipart' => [
                         [
-                            'name' => 'file',
+                            'name' => 'file[]',
                             'contents' => fopen($tmpFile, 'rb'),
                             'filename' => basename($tmpFile)
                         ]
@@ -564,7 +564,7 @@ class HttpClientTest extends BaseTestCase
                 $response = $client->post($testUrl . '/upload', [
                     'multipart' => [
                         [
-                            'name' => 'file',
+                            'name' => 'file[]',
                             'contents' => fopen($tmpFile, 'rb'),
                             'filename' => 'empty.txt'
                         ]

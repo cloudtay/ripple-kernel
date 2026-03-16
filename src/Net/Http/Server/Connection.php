@@ -18,7 +18,7 @@ use RuntimeException;
 use Ripple\Net\Http\Enum\Method;
 use Ripple\Net\Http\Server;
 use Ripple\Net\Exception\FormatException;
-use Ripple\Net\Http\Server\Upload\Multipart;
+use Ripple\Net\Http\Server\Upload\FormData;
 use Ripple\Runtime\Support\Stdin;
 use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
@@ -27,8 +27,6 @@ use Throwable;
 use function array_merge;
 use function count;
 use function explode;
-use function is_array;
-use function is_string;
 use function json_decode;
 use function max;
 use function parse_str;
@@ -47,6 +45,7 @@ use function strtr;
 use function intval;
 use function rawurldecode;
 use function trim;
+use function str_ends_with;
 
 use const PHP_URL_PATH;
 
@@ -84,13 +83,13 @@ class Connection
      * Query 查询参数数组
      * @var array
      */
-    private array $query;
+    private array $get;
 
     /**
      * 请求体参数数组
      * @var array
      */
-    private array $request;
+    private array $post;
 
     /**
      * 请求属性数组
@@ -124,9 +123,9 @@ class Connection
 
     /**
      * Multipart数据处理器
-     * @var Multipart|null
+     * @var FormData|null
      */
-    private Multipart|null $multipart;
+    private FormData|null $multipart;
 
     /**
      * 已接收的请求体长度
@@ -170,6 +169,25 @@ class Connection
     }
 
     /**
+     * 重置连接状态
+     * @return void
+     */
+    private function reset(): void
+    {
+        $this->step             = self::STEP_INITIAL;
+        $this->get            = [];
+        $this->post          = [];
+        $this->attributes       = [];
+        $this->cookies          = [];
+        $this->files            = [];
+        $this->meta             = $this->alwaysMeta;
+        $this->content          = '';
+        $this->multipart        = null;
+        $this->bodySize         = 0;
+        $this->contentLength    = 0;
+    }
+
+    /**
      * 启动连接处理
      * @return void
      */
@@ -200,66 +218,6 @@ class Connection
     }
 
     /**
-     * @return bool
-     */
-    public function isClosed(): bool
-    {
-        return $this->stream->isClosed();
-    }
-
-    /**
-     * 处理 HTTP 请求
-     * @param Request $req 请求信息
-     * @return void
-     * @throws ConnectionException
-     */
-    private function onRequest(Request $req): void
-    {
-        $response = $req->response();
-        $response->withHeader('Server', 'ripple');
-
-        // 半关闭检测
-        $connHeader = $reqInfo['server']['HTTP_CONNECTION'] ?? '';
-        $upgradeHeader = $reqInfo['server']['HTTP_UPGRADE'] ?? '';
-        $keepAlive = strtolower($connHeader) !== 'close';
-        $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' && str_contains(strtolower($connHeader), 'upgrade');
-
-        if ($keepAlive || $isWebSocketUpgrade) {
-            $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
-        } else {
-            $response->withHeader('Connection', 'close');
-        }
-
-        try {
-            Scheduler::resume($this->server->acquireCoroutine(), $req)->rethrow();
-        } catch (ConnectionException $exception) {
-            throw $exception;
-        } catch (Throwable $exception) {
-            $req->respond($exception->getMessage(), [], 500);
-            $this->reset();
-        }
-    }
-
-    /**
-     * 重置连接状态
-     * @return void
-     */
-    private function reset(): void
-    {
-        $this->step             = self::STEP_INITIAL;
-        $this->query            = [];
-        $this->request          = [];
-        $this->attributes       = [];
-        $this->cookies          = [];
-        $this->files            = [];
-        $this->meta             = $this->alwaysMeta;
-        $this->content          = '';
-        $this->multipart        = null;
-        $this->bodySize         = 0;
-        $this->contentLength    = 0;
-    }
-
-    /**
      * 处理接收到的数据
      * @param string $content 接收的数据
      * @return Request[] 解析出的请求列表
@@ -281,19 +239,19 @@ class Connection
         }
 
         if ($this->step === self::STEP_FILE_TRANSFER) {
-            $this->processFileUpload();
+            $this->processFormData();
         }
 
         if ($this->step === self::STEP_COMPLETE) {
             $reqInfo = $this->completeRequest();
             $reqs[] =  new Request(
-                $this,
-                $reqInfo['query'],
-                $reqInfo['request'],
+                $reqInfo['get'],
+                $reqInfo['post'],
                 $reqInfo['cookies'],
                 $reqInfo['files'],
                 $reqInfo['server'],
-                $reqInfo['content']
+                $reqInfo['content'],
+                $this,
             );
 
             if ($this->buf !== '') {
@@ -315,6 +273,7 @@ class Connection
     private function initialStep(): void
     {
         if ($headerEnd = strpos($this->buf, "\r\n\r\n")) {
+
             $buffer = $this->readBuffer();
 
             $this->step = self::STEP_CONTINUOUS;
@@ -357,7 +316,7 @@ class Connection
                 $boundary = $matches[1];
                 $this->step = self::STEP_FILE_TRANSFER;
                 if (!isset($this->multipart)) {
-                    $this->multipart = new Multipart($boundary);
+                    $this->multipart = new FormData($boundary);
                 }
             } else {
                 $this->step = self::STEP_CONTINUOUS;
@@ -409,7 +368,7 @@ class Connection
      */
     private function parseQuery(string $queryStr): void
     {
-        parse_str($queryStr, $this->query);
+        parse_str($queryStr, $this->get);
     }
 
     /**
@@ -434,20 +393,6 @@ class Connection
     }
 
     /**
-     * 验证内容长度
-     * @return void
-     * @throws RuntimeException 运行时异常
-     */
-    private function checkContentLength(): void
-    {
-        if ($this->bodySize === $this->contentLength) {
-            $this->step = self::STEP_COMPLETE;
-        } elseif ($this->bodySize > $this->contentLength) {
-            throw new RuntimeException('Content-Length is not match');
-        }
-    }
-
-    /**
      * 处理连续传输
      * @return void
      * @throws RuntimeException 运行时异常
@@ -463,21 +408,48 @@ class Connection
     }
 
     /**
+     * 验证内容长度
+     * @return void
+     * @throws RuntimeException 运行时异常
+     */
+    private function checkContentLength(): void
+    {
+        if ($this->bodySize === $this->contentLength) {
+            $this->step = self::STEP_COMPLETE;
+        } elseif ($this->bodySize > $this->contentLength) {
+            throw new RuntimeException('Content-Length is not match');
+        }
+    }
+
+    /**
      * 处理文件传输
      * @return void
      * @throws FormatException 格式异常
      * @throws RuntimeException 运行时异常
      */
-    private function processFileUpload(): void
+    private function processFormData(): void
     {
         if ($buffer = $this->readBuffer(max(0, $this->contentLength - $this->bodySize))) {
             $this->bodySize += strlen($buffer);
-            foreach ($this->multipart->fill($buffer) as $name => $multipartResult) {
-                if (is_string($multipartResult)) {
-                    $this->request[$name] = $multipartResult;
-                } elseif (is_array($multipartResult)) {
-                    foreach ($multipartResult as $file) {
-                        $this->files[$name][] = $file;
+            foreach ($this->multipart->fill($buffer) as $multipartResult) {
+                foreach ($multipartResult as $formItem) {
+                    $name = $formItem['name'];
+                    $isArray = str_ends_with($name, '[]');
+                    $isFile = $formItem['isFile'];
+
+                    if ($isArray) {
+                        $name = substr($name, 0, -2);
+                        if ($isFile) {
+                            $this->files[$name][] = $formItem;
+                        } else {
+                            $this->post[$name][] = $formItem['value'];
+                        }
+                    } else {
+                        if ($isFile) {
+                            $this->files[$name] = $formItem;
+                        } else {
+                            $this->post[$name] = $formItem['value'];
+                        }
                     }
                 }
             }
@@ -497,8 +469,8 @@ class Connection
         $this->parseXfp();
 
         $result = [
-            'query'      => $this->query,
-            'request'    => $this->request,
+            'get'        => $this->get,
+            'post'       => $this->post,
             'attributes' => $this->attributes,
             'cookies'    => $this->cookies,
             'files'      => $this->files,
@@ -549,10 +521,9 @@ class Connection
     {
         if ($this->method->value === 'POST') {
             if (str_contains($this->contentType, 'application/json')) {
-                $this->request = array_merge($this->request, json_decode($this->content, true) ?? []);
-            } else {
-                parse_str($this->content, $reqParams);
-                $this->request = array_merge($this->request, $reqParams);
+                $this->post = array_merge($this->post, json_decode($this->content, true) ?? []);
+            } elseif ($this->contentType === 'application/x-www-form-urlencoded') {
+                parse_str($this->content, $this->post);
             }
         }
     }
@@ -567,5 +538,46 @@ class Connection
         if ($xfw = $this->meta['HTTP_X_FORWARDED_PROTO'] ?? null) {
             $this->meta['HTTPS'] = $xfw === 'https' ? 'on' : 'off';
         }
+    }
+
+    /**
+     * 处理 HTTP 请求
+     * @param Request $req 请求信息
+     * @return void
+     * @throws ConnectionException
+     */
+    private function onRequest(Request $req): void
+    {
+        $response = $req->response();
+        $response->withHeader('Server', 'ripple');
+
+        // 半关闭检测
+        $connHeader = $reqInfo['server']['HTTP_CONNECTION'] ?? '';
+        $upgradeHeader = $reqInfo['server']['HTTP_UPGRADE'] ?? '';
+        $keepAlive = strtolower($connHeader) !== 'close';
+        $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' && str_contains(strtolower($connHeader), 'upgrade');
+
+        if ($keepAlive || $isWebSocketUpgrade) {
+            $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
+        } else {
+            $response->withHeader('Connection', 'close');
+        }
+
+        try {
+            Scheduler::resume($this->server->acquireCoroutine(), $req)->rethrow();
+        } catch (ConnectionException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            $req->respond($exception->getMessage(), [], 500);
+            $this->reset();
+        }
+    }
+
+    /**
+     * @return bool
+     */
+    public function isClosed(): bool
+    {
+        return $this->stream->isClosed();
     }
 }

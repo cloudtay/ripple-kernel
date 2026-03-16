@@ -24,12 +24,11 @@ use function uniqid;
 use function preg_match;
 use function sprintf;
 use function fwrite;
-use function var_dump;
 
 /**
  * Http upload parser
  */
-class Multipart
+class FormData
 {
     private const STATUS_WAITING_META = 0;
 
@@ -38,7 +37,7 @@ class Multipart
     /**
      * @var int
      */
-    private int $status = Multipart::STATUS_WAITING_META;
+    private int $status = FormData::STATUS_WAITING_META;
 
     /**
      * @var array|null
@@ -52,9 +51,9 @@ class Multipart
 
     /**
      * 上传文件
-     * @param string $boundary
+     * @param string|null $boundary
      */
-    public function __construct(private readonly string $boundary)
+    public function __construct(private readonly ?string $boundary = null)
     {
     }
 
@@ -70,37 +69,45 @@ class Multipart
         $files       = array();
 
         do {
-            if ($this->status === Multipart::STATUS_WAITING_META) {
+            if ($this->status === FormData::STATUS_WAITING_META) {
                 if ($meta = $this->parseMeta()) {
-                    $meta['path'] = sprintf('%s/%s/%s', sys_get_temp_dir(), '/', uniqid());
-                    $meta['stream'] = fopen($meta['path'], 'wb+');
-                    $this->filling = $meta;
+                    if ($meta['isFile']) {
+                        $meta['path'] = sprintf('%s/%s/%s', sys_get_temp_dir(), '/', uniqid());
+                        $meta['stream'] = fopen($meta['path'], 'wb+');
+                    } else {
+                        $meta['value'] = '';
+                    }
 
-                    $this->status = Multipart::STATUS_TRAN;
+                    $this->filling = $meta;
+                    $this->status = FormData::STATUS_TRAN;
                 }
             }
 
-            if ($this->status === Multipart::STATUS_TRAN) {
+            if ($this->status === FormData::STATUS_TRAN) {
                 $meta = $this->filling;
 
                 $buffer = $this->readBuffer();
                 $boundaryPosition = strpos($buffer, "--{$this->boundary}");
                 if ($boundaryPosition !== false) {
-                    $buffer = substr($buffer, 0, $boundaryPosition - 2);
                     $this->buffer = substr($buffer, $boundaryPosition);
+                    $buffer = substr($buffer, 0, $boundaryPosition - 2);
                 }
 
                 // 填充文件
-                fwrite($meta['stream'], $buffer);
+                $meta['isFile']
+                    ? fwrite($meta['stream'], $buffer)
+                    : ($meta['value'] .= $buffer);
 
                 if ($boundaryPosition !== false) {
                     // 释放文件
-                    fclose($meta['stream']);
-                    unset($meta['stream']);
+                    if ($meta['isFile']) {
+                        fclose($meta['stream']);
+                        unset($meta['stream']);
+                    }
+
                     $files[$meta['name']][] = $meta;
                     $this->filling = null;
-
-                    $this->status = Multipart::STATUS_WAITING_META;
+                    $this->status = FormData::STATUS_WAITING_META;
                     continue;
                 }
             }
@@ -113,7 +120,7 @@ class Multipart
 
     /**
      * 解析文件元信息
-     * @return array|false
+     * @return array{name:string,isFile:bool,fileName:string|null,contentType:string|null} | false
      * @throws FormatException
      */
     private function parseMeta(): array|false
@@ -123,19 +130,33 @@ class Multipart
             return false;
         }
 
-        $header       = substr($this->buffer, 0, $headerEnd);
-        $re = '/^Content-Disposition:\x20*form-data\x20*;\x20*name="([^"]+)"\x20*;?\x20*(?:filename="([^"]*)")?\x20*(?:\r?\nContent-Type:\x20*(.+))?\r?\n/umi';
+        $re = '/^Content-Disposition:\x20*form-data\x20*;\x20*name="([^"]+)"\x20*;?\x20*(?:(filename)="([^"]*)")?\x20*(?:\r?\nContent-Type:\x20*(.+))?/umi';
+        $header = substr($this->buffer, 0, $headerEnd);
+
         if (!preg_match($re, $header, $matches)) {
-            var_dump($header);
             throw new RuntimeException('not match meta information');
         }
 
         $this->buffer = substr($this->buffer, $headerEnd + 4);
-        return array(
-            'name'        => $matches[1] ?? null,
-            'fileName'    => $matches[2] ?? null,
-            'contentType' => $matches[3] ?? null,
-        );
+
+        if (!isset($matches[1])) {
+            throw new RuntimeException('not match meta name');
+        }
+
+        $meta['name'] = $matches[1];
+
+        if (isset($matches[2]) && $matches[2] === 'filename') {
+            $meta['isFile'] = true;
+            $meta['fileName'] = $matches[3] ?? '';
+        } else {
+            $meta['isFile'] = false;
+        }
+
+        if (isset($matches[4])) {
+            $meta['contentType'] = $matches[4];
+        }
+
+        return $meta;
     }
 
     /**

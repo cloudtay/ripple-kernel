@@ -44,13 +44,13 @@ class Request
      * @param mixed|null $CONTENT
      */
     public function __construct(
-        public readonly ?Connection $conn = null,
         public readonly array      $GET = [],
         public readonly array      $POST = [],
         public readonly array      $COOKIE = [],
         public readonly array      $FILES = [],
         public readonly array      $SERVER = [],
         public readonly mixed      $CONTENT = null,
+        public readonly ?Connection $conn = null,
     ) {
         $this->REQUEST = array_merge($this->GET, $this->POST);
     }
