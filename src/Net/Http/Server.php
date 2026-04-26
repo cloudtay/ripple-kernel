@@ -29,14 +29,10 @@ use function stream_socket_server;
 use function stream_set_blocking;
 use function stream_socket_accept;
 use function fclose;
-use function socket_import_stream;
-use function socket_setopt;
 use function call_user_func;
 
 use const STREAM_SERVER_BIND;
 use const STREAM_SERVER_LISTEN;
-use const SOL_TCP;
-use const TCP_NODELAY;
 
 /**
  * Http service class
@@ -121,11 +117,6 @@ class Server
             if (!$client) {
                 return;
             }
-
-            $socket = socket_import_stream($client);
-            socket_setopt($socket, SOL_TCP, TCP_NODELAY, 1);
-            //            @socket_setopt($socket, SOL_SOCKET, SO_RCVBUF, 65536);
-            //            @socket_setopt($socket, SOL_SOCKET, SO_FINDBUGS, 65536);
 
             $remoteInfo = parse_url("tcp://{$remoteAddr}");
 

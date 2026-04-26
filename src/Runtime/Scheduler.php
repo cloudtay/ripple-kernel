@@ -194,7 +194,7 @@ final class Scheduler
      * @param Closure $callback 要执行的闭包
      * @return void 返回闭包执行结果或协程恢复时的值
      */
-    public static function nextTick(Closure $callback): void
+    public static function future(Closure $callback): void
     {
         self::$nextTicks[] = $callback;
     }

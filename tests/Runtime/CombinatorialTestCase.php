@@ -268,7 +268,7 @@ abstract class CombinatorialTestCase extends BaseTestCase
      */
     protected function executeInMainMode(Coroutine $coroutine): void
     {
-        Scheduler::nextTick(function () use ($coroutine) {
+        Scheduler::future(function () use ($coroutine) {
             Scheduler::enqueue($coroutine, true);
         });
     }
@@ -385,7 +385,7 @@ abstract class CombinatorialTestCase extends BaseTestCase
         $currentCoroutine = \Co\current();
         $this->output[] = 'before_context_switch';
 
-        Scheduler::nextTick(function () {
+        Scheduler::future(function () {
             $fiber = Fiber::getCurrent();
             $coroutine = \Co\current();
             $this->output[] = 'in_runtime_context';

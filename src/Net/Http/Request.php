@@ -13,7 +13,6 @@
 namespace Ripple\Net\Http;
 
 use Ripple\Net\Http\Server\Connection;
-use Ripple\Net\Http\Trait\ClientRequest;
 use Ripple\Stream\Exception\ConnectionException;
 
 use function array_merge;
@@ -25,8 +24,6 @@ use function json_encode;
  */
 class Request
 {
-    use ClientRequest;
-
     /*** @var array */
     public readonly array $REQUEST;
 

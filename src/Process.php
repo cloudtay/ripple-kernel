@@ -85,7 +85,7 @@ class Process
             return self::spawn($callback);
         }
 
-        Scheduler::nextTick(static function () use ($callback, $owner) {
+        Scheduler::future(static function () use ($callback, $owner) {
             Scheduler::resume($owner, self::spawn($callback));
         });
 

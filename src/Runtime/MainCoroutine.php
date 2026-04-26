@@ -103,7 +103,7 @@ final class MainCoroutine extends Coroutine
 
         $owner = \Co\current();
         if ($owner instanceof FiberCoroutine) {
-            Scheduler::nextTick(fn () => Scheduler::resume($owner, $this->suspendValue));
+            Scheduler::future(fn () => Scheduler::resume($owner, $this->suspendValue));
             return $owner->suspend();
         }
 
@@ -123,7 +123,7 @@ final class MainCoroutine extends Coroutine
 
         $owner = \Co\current();
         if ($owner instanceof FiberCoroutine) {
-            Scheduler::nextTick(fn () => Scheduler::resume($owner, $this->suspendValue));
+            Scheduler::future(fn () => Scheduler::resume($owner, $this->suspendValue));
             return $owner->suspend();
         }
 

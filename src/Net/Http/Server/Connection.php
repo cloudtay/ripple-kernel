@@ -111,9 +111,9 @@ class Connection
 
     /**
      * HTTP 请求体内容
-     * @var string
+     * @var mixed
      */
-    private string $content;
+    private mixed $content;
 
     /**
      * 数据接收缓冲区
@@ -181,7 +181,7 @@ class Connection
         $this->cookies          = [];
         $this->files            = [];
         $this->meta             = $this->alwaysMeta;
-        $this->content          = '';
+        $this->content          = null;
         $this->multipart        = null;
         $this->bodySize         = 0;
         $this->contentLength    = 0;

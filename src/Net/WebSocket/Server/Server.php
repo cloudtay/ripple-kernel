@@ -23,6 +23,7 @@ use function sha1;
 use function str_contains;
 use function strtolower;
 use function Co\go;
+use function sprintf;
 
 class Server
 {
@@ -62,50 +63,50 @@ class Server
      */
     private function setupRequestHandler(): void
     {
-        $this->httpServer->onRequest = function (Request $request) {
-            return $this->handleWebSocketRequest($request);
-        };
+        $this->httpServer->onRequest = fn (Request $request) => $this->handleWebSocketRequest($request);
     }
 
     /**
      * 处理 WebSocket 请求
      * @param Request $request
-     * @return Connection|null
+     * @return void
      * @throws ConnectionException
      */
-    private function handleWebSocketRequest(Request $request): ?Connection
+    private function handleWebSocketRequest(Request $request): void
     {
         if (!$this->isWebSocketUpgrade($request)) {
             $request->respond('Not Found', [], 404);
-            return null;
+            return;
         }
 
         if (!$this->performHandshake($request)) {
             $request->respond('Bad Request', [], 400);
-            return null;
+            return;
         }
 
         $connection = new Connection($request->conn->stream, $request);
 
         if (isset($this->onRequest)) {
             try {
-                $result = ($this->onRequest)($request, $connection);
-                if ($result === false) {
-                    $request->respond('Forbidden', [], 403);
-                    return null;
-                }
+                ($this->onRequest)($request, $connection);
             } catch (Throwable $e) {
-                $request->respond('Bad Request', [], 400);
-                return null;
+                $request->respond(
+                    sprintf("%s:%s", 'Bad Request', $e->getMessage()),
+                    [],
+                    400
+                );
+                return;
             }
+        }
+
+        if (!$connection->isAlive()) {
+            return;
         }
 
         if (isset($this->onConnect)) {
             $handler = $this->onConnect;
-            go(fn () => $handler($connection));
+            go(static fn () => $handler($connection));
         }
-
-        return $connection;
     }
 
     /**
@@ -147,7 +148,7 @@ class Server
         $response->withBody('');
 
         try {
-            $response($request->conn->stream);
+            $response();
             return true;
         } catch (Throwable) {
             return false;

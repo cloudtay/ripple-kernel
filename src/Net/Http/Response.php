@@ -14,7 +14,6 @@ namespace Ripple\Net\Http;
 
 use Closure;
 use Generator;
-use Ripple\Net\Http\Trait\ClientResponse;
 use Ripple\Runtime\Scheduler;
 use Ripple\Stream\Exception\ConnectionException;
 use Ripple\Stream;
@@ -42,8 +41,6 @@ use function ucfirst;
  */
 class Response
 {
-    use ClientResponse;
-
     /*** @var mixed|Stream|Generator|string */
     protected mixed $body;
 
