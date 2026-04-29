@@ -21,6 +21,7 @@ final class ClientOptions
      * @param int $maxHeaderBytes
      * @param int $maxBodyBytes
      * @param bool $decodeContent
+     * @param int $uploadChunkSize
      */
     private function __construct(
         private readonly float $connectTimeout,
@@ -29,7 +30,8 @@ final class ClientOptions
         private readonly float $requestTimeout,
         private readonly int $maxHeaderBytes,
         private readonly int $maxBodyBytes,
-        private readonly bool $decodeContent
+        private readonly bool $decodeContent,
+        private readonly int $uploadChunkSize
     ) {
         if ($requestTimeout > 0.0) {
             $this->deadline = microtime(true) + $requestTimeout;
@@ -49,7 +51,8 @@ final class ClientOptions
             self::nonNegativeFloat($config['request_timeout'] ?? 0.0),
             self::nonNegativeInt($config['max_header_bytes'] ?? 65536),
             self::nonNegativeInt($config['max_body_bytes'] ?? 0),
-            (bool)($config['decode_content'] ?? true)
+            (bool)($config['decode_content'] ?? true),
+            self::positiveInt($config['upload_chunk_size'] ?? 8192, 8192)
         );
     }
 
@@ -107,6 +110,14 @@ final class ClientOptions
     public function decodeContent(): bool
     {
         return $this->decodeContent;
+    }
+
+    /**
+     * @return int
+     */
+    public function uploadChunkSize(): int
+    {
+        return $this->uploadChunkSize;
     }
 
     /**
@@ -171,5 +182,16 @@ final class ClientOptions
     private static function nonNegativeInt(mixed $value): int
     {
         return max(0, (int)$value);
+    }
+
+    /**
+     * @param mixed $value
+     * @param int $default
+     * @return int
+     */
+    private static function positiveInt(mixed $value, int $default): int
+    {
+        $value = (int)$value;
+        return $value > 0 ? $value : $default;
     }
 }

@@ -3,12 +3,11 @@
 namespace Ripple\Tests\Net;
 
 use Ripple\Net\Http;
+use Ripple\Net\Http\Client\Client;
 use Ripple\Net\Http\Request;
 use Ripple\Net\Http\Response;
 use Ripple\Process;
 use Ripple\Tests\Runtime\BaseTestCase;
-use GuzzleHttp\Client;
-use GuzzleHttp\Exception\GuzzleException;
 use Throwable;
 
 use function basename;
@@ -129,7 +128,6 @@ class HttpFileTransferTest extends BaseTestCase
     /**
      * @testdox 上传应成功并返回文件MD5
      * @test
-     * @throws GuzzleException
      * @throws Throwable
      */
     public function testFileUpload(): void
@@ -164,7 +162,6 @@ class HttpFileTransferTest extends BaseTestCase
     /**
      * @testdox 下载应成功且本地MD5与Header一致
      * @test
-     * @throws GuzzleException
      */
     public function testFileDownload(): void
     {
@@ -192,7 +189,6 @@ class HttpFileTransferTest extends BaseTestCase
     /**
      * @testdox 空文件上传应返回空内容MD5
      * @test
-     * @throws GuzzleException
      */
     public function testFileUploadWithEmptyFile(): void
     {
@@ -230,20 +226,15 @@ class HttpFileTransferTest extends BaseTestCase
     {
         $this->startTestServer();
 
-        try {
-            $response = $this->client->request('POST', $this->testUrl . '/upload', [
-                'multipart' => [],
-                'http_errors' => false,
-            ]);
+        $response = $this->client->request('POST', $this->testUrl . '/upload', [
+            'multipart' => [],
+        ]);
 
-            $this->assertEquals(400, $response->getStatusCode());
-            $body = json_decode((string) $response->getBody(), true);
-            $this->assertIsArray($body);
-            $this->assertArrayHasKey('error', $body);
-            $this->assertEquals('No file uploaded', $body['error']);
-        } catch (GuzzleException $e) {
-            $this->fail('请求失败: ' . $e->getMessage());
-        }
+        $this->assertEquals(400, $response->getStatusCode());
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals('No file uploaded', $body['error']);
     }
 
     /**
@@ -254,25 +245,18 @@ class HttpFileTransferTest extends BaseTestCase
     {
         $this->startTestServer();
 
-        try {
-            $response = $this->client->request('GET', $this->testUrl . '/nonexistent', [
-                'http_errors' => false,
-            ]);
+        $response = $this->client->request('GET', $this->testUrl . '/nonexistent');
 
-            $this->assertEquals(404, $response->getStatusCode());
-            $body = json_decode((string) $response->getBody(), true);
-            $this->assertIsArray($body);
-            $this->assertArrayHasKey('error', $body);
-            $this->assertEquals('Not Found', $body['error']);
-        } catch (GuzzleException $e) {
-            $this->fail('请求失败: ' . $e->getMessage());
-        }
+        $this->assertEquals(404, $response->getStatusCode());
+        $body = json_decode((string) $response->getBody(), true);
+        $this->assertIsArray($body);
+        $this->assertArrayHasKey('error', $body);
+        $this->assertEquals('Not Found', $body['error']);
     }
 
     /**
      * @testdox 大文件上传应成功且MD5匹配
      * @test
-     * @throws GuzzleException
      * @throws Throwable
      */
     public function testLargeFileUpload(): void
@@ -291,7 +275,6 @@ class HttpFileTransferTest extends BaseTestCase
                         'filename' => basename($tmpFile),
                     ],
                 ],
-                'timeout' => 30,
             ]);
 
             $this->assertEquals(200, $response->getStatusCode());
@@ -307,7 +290,6 @@ class HttpFileTransferTest extends BaseTestCase
     /**
      * @testdox JSON 请求体应被解析且 Connection close 应返回 close
      * @test
-     * @throws GuzzleException
      */
     public function testJsonPostAndConnectionClose(): void
     {

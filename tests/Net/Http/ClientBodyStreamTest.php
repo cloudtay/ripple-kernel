@@ -11,11 +11,14 @@ use Ripple\Net\Http\Client\Body\StreamFactory;
 use Ripple\Net\Http\Exception\RequestException;
 use Ripple\Net\Http\Request;
 use Ripple\Net\Http\Uri;
+use RuntimeException;
 
 use function fopen;
 use function fwrite;
 use function rewind;
 use function strlen;
+
+use const SEEK_SET;
 
 final class ClientBodyStreamTest extends TestCase
 {
@@ -108,7 +111,7 @@ final class ClientBodyStreamTest extends TestCase
 
             public function write(string $string): int
             {
-                throw new \RuntimeException('not writable');
+                throw new RuntimeException('not writable');
             }
 
             public function isReadable(): bool

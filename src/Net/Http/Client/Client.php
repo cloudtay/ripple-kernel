@@ -6,25 +6,43 @@ use Closure;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use Ripple\Net\Http\BodyStream;
+use Ripple\Net\Http\Client\Body\NetworkResponseStream;
 use Ripple\Net\Http\Exception\NetworkException;
+use Ripple\Net\Http\Exception\ProtocolException;
 use Ripple\Net\Http\Exception\TimeoutException;
 use Ripple\Net\Http\Protocol\RequestSerializer;
 use Ripple\Net\Http\Protocol\ResponseParser;
-use Ripple\Net\Http\Request;
-use Ripple\Net\Http\Uri;
+use Ripple\Net\Http\Response;
 use Ripple\Runtime\Exception\CoroutineStateException;
 use Ripple\Runtime\Scheduler;
 use Ripple\Stream\Exception\ConnectionException;
 use Ripple\Time;
 
-use function http_build_query;
-use function json_encode;
+use function array_slice;
+use function ctype_xdigit;
+use function explode;
+use function fclose;
+use function fopen;
+use function fflush;
+use function fwrite;
+use function hexdec;
+use function implode;
+use function is_callable;
+use function is_resource;
+use function is_string;
 use function method_exists;
+use function preg_match;
+use function rewind;
+use function strcasecmp;
+use function str_contains;
+use function stripos;
+use function strlen;
+use function strpos;
 use function strtoupper;
-
-use const JSON_UNESCAPED_SLASHES;
-use const JSON_UNESCAPED_UNICODE;
+use function substr;
+use function trim;
 
 final class Client implements ClientInterface
 {
@@ -49,6 +67,11 @@ final class Client implements ClientInterface
     private ResponseDecoder $decoder;
 
     /**
+     * @var RequestBuilder
+     */
+    private RequestBuilder $requestBuilder;
+
+    /**
      * @param array $config
      */
     public function __construct(private array $config = [])
@@ -57,6 +80,7 @@ final class Client implements ClientInterface
         $this->serializer = $config['serializer'] ?? new RequestSerializer();
         $this->options = ClientOptions::fromArray($config);
         $this->decoder = $config['decoder'] ?? new ResponseDecoder();
+        $this->requestBuilder = $config['request_builder'] ?? new RequestBuilder();
     }
 
     /**
@@ -66,6 +90,22 @@ final class Client implements ClientInterface
      */
     public function sendRequest(RequestInterface $request): ResponseInterface
     {
+        return $this->sendRequestWithTransfer($request, new TransferOptions(
+            false,
+            null,
+            null,
+            $request->getBody()->getSize() ?? (int)$request->getHeaderLine('Content-Length')
+        ));
+    }
+
+    /**
+     * @param RequestInterface $request
+     * @param TransferOptions $transfer
+     * @return ResponseInterface
+     * @throws ConnectionException
+     */
+    private function sendRequestWithTransfer(RequestInterface $request, TransferOptions $transfer): ResponseInterface
+    {
         if (isset($this->config['sender'])) {
             return ($this->config['sender'])($request);
         }
@@ -74,10 +114,21 @@ final class Client implements ClientInterface
             ? $this->connector->connect($request->getUri(), $this->options->connectTimeout())
             : ($this->connector)($request->getUri(), $this->config);
 
+        $closeStream = true;
         try {
             $this->assertRequestNotExpired($request);
-            $stream->writeAll($this->serializer->serialize($request), $this->options->writeTimeout());
+            $this->writeRequest($stream, $request, $transfer);
             $this->assertRequestNotExpired($request);
+
+            if ($transfer->hasSink()) {
+                return $this->receiveToSink($stream, $request, $transfer);
+            }
+            if ($transfer->streamResponse()) {
+                $response = $this->receiveAsStream($stream, $request, $transfer);
+                $closeStream = false;
+                return $response;
+            }
+
             $parser = new ResponseParser(
                 method: $request->getMethod(),
                 maxHeaderBytes: $this->options->maxHeaderBytes(),
@@ -98,7 +149,9 @@ final class Client implements ClientInterface
         } catch (ConnectionException $exception) {
             throw new NetworkException($exception->getMessage(), $request, 0, $exception);
         } finally {
-            $stream->close();
+            if ($closeStream) {
+                $stream->close();
+            }
         }
     }
 
@@ -111,23 +164,9 @@ final class Client implements ClientInterface
      */
     public function request(string $method, string $uri, array $options = []): ResponseInterface
     {
-        $headers = $options['headers'] ?? [];
-        $body = $options['body'] ?? '';
+        [$request, $transfer] = $this->requestBuilder->build($method, $uri, $options);
 
-        if (isset($options['json'])) {
-            $body = json_encode($options['json'], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-            $headers['Content-Type'] = 'application/json';
-        } elseif (isset($options['form_params'])) {
-            $body = http_build_query($options['form_params']);
-            $headers['Content-Type'] = 'application/x-www-form-urlencoded';
-        }
-
-        return $this->sendRequest(new Request(
-            method: strtoupper($method),
-            uri: new Uri($uri),
-            headers: $headers,
-            body: BodyStream::fromString((string)$body),
-        ));
+        return $this->sendRequestWithTransfer($request, $transfer);
     }
 
     /**
@@ -194,6 +233,442 @@ final class Client implements ClientInterface
         if ($this->options->hasExpired()) {
             throw new TimeoutException('Request timeout exceeded.', $request);
         }
+    }
+
+    /**
+     * @param object $stream
+     * @param RequestInterface $request
+     * @param TransferOptions $transfer
+     * @return void
+     */
+    private function writeRequest(object $stream, RequestInterface $request, TransferOptions $transfer): void
+    {
+        $stream->writeAll($this->serializer->serializeHeaders($request), $this->options->writeTimeout());
+
+        $body = $request->getBody();
+        if ($body->isSeekable()) {
+            $body->rewind();
+        }
+
+        $uploaded = 0;
+        while (!$body->eof()) {
+            $chunk = $body->read($this->options->uploadChunkSize());
+            if ($chunk === '') {
+                break;
+            }
+
+            $stream->writeAll($chunk, $this->options->writeTimeout());
+            $uploaded += strlen($chunk);
+            $this->notifyProgress($transfer, 0, 0, $transfer->uploadTotal(), $uploaded);
+            $this->assertRequestNotExpired($request);
+        }
+    }
+
+    /**
+     * @param TransferOptions $transfer
+     * @param int $downloadTotal
+     * @param int $downloaded
+     * @param int $uploadTotal
+     * @param int $uploaded
+     * @return void
+     */
+    private function notifyProgress(TransferOptions $transfer, int $downloadTotal, int $downloaded, int $uploadTotal, int $uploaded): void
+    {
+        $progress = $transfer->progress();
+        if (is_callable($progress)) {
+            $progress($downloadTotal, $downloaded, $uploadTotal, $uploaded);
+        }
+    }
+
+    /**
+     * @param object $stream
+     * @param RequestInterface $request
+     * @param TransferOptions $transfer
+     * @return ResponseInterface
+     */
+    private function receiveToSink(object $stream, RequestInterface $request, TransferOptions $transfer): ResponseInterface
+    {
+        [$statusCode, $headers, $reasonPhrase, $protocolVersion, $buffer] = $this->readFinalResponseHead($stream, $request);
+        $sink = $this->openSink($transfer->sink());
+
+        try {
+            if ($this->isNoBodyResponse($request, $statusCode)) {
+                return (new Response($statusCode, $headers, $this->sinkBody($transfer->sink()), $reasonPhrase))->withProtocolVersion($protocolVersion);
+            }
+
+            $isChunked = $this->isChunked($headers);
+            $contentLength = $this->contentLength($headers);
+
+            if ($isChunked) {
+                $downloaded = $this->receiveChunkedBody($stream, $request, $transfer, $sink, $buffer);
+                $headers = $this->removeHeader($headers, 'Transfer-Encoding');
+                $headers['Content-Length'] = [(string)$downloaded];
+            } elseif ($contentLength !== null) {
+                $this->receiveFixedBody($stream, $request, $transfer, $sink, $buffer, $contentLength);
+            } else {
+                throw new ProtocolException('HTTP response body length is unknown.');
+            }
+
+            $this->flushSink($sink);
+            return (new Response($statusCode, $headers, $this->sinkBody($transfer->sink()), $reasonPhrase))->withProtocolVersion($protocolVersion);
+        } finally {
+            if (is_resource($sink) && is_string($transfer->sink())) {
+                fclose($sink);
+            }
+        }
+    }
+
+    /**
+     * @param object $stream
+     * @param RequestInterface $request
+     * @param TransferOptions $transfer
+     * @return ResponseInterface
+     */
+    private function receiveAsStream(object $stream, RequestInterface $request, TransferOptions $transfer): ResponseInterface
+    {
+        [$statusCode, $headers, $reasonPhrase, $protocolVersion, $buffer] = $this->readFinalResponseHead($stream, $request);
+
+        if ($this->isNoBodyResponse($request, $statusCode)) {
+            $stream->close();
+            return (new Response($statusCode, $headers, '', $reasonPhrase))->withProtocolVersion($protocolVersion);
+        }
+
+        $isChunked = $this->isChunked($headers);
+        $contentLength = $this->contentLength($headers);
+        if (!$isChunked && $contentLength === null) {
+            $stream->close();
+            throw new ProtocolException('HTTP response body length is unknown.');
+        }
+
+        if ($isChunked) {
+            $headers = $this->removeHeader($headers, 'Transfer-Encoding');
+        }
+
+        $body = new NetworkResponseStream(
+            $buffer,
+            $contentLength,
+            $isChunked,
+            $this->options->maxBodyBytes(),
+            fn (): string => $this->readChunk($stream, $request),
+            static fn (): null => $stream->close(),
+            function (int $downloaded) use ($transfer, $contentLength): void {
+                $this->notifyProgress($transfer, $contentLength ?? 0, $downloaded, $transfer->uploadTotal(), $transfer->uploadTotal());
+            }
+        );
+
+        return (new Response($statusCode, $headers, $body, $reasonPhrase))->withProtocolVersion($protocolVersion);
+    }
+
+    /**
+     * @param object $stream
+     * @param RequestInterface $request
+     * @return array{0:int,1:array,2:string,3:string,4:string}
+     */
+    private function readFinalResponseHead(object $stream, RequestInterface $request): array
+    {
+        $buffer = '';
+
+        while (true) {
+            $headerEnd = strpos($buffer, "\r\n\r\n");
+            while ($headerEnd === false) {
+                if ($this->options->maxHeaderBytes() > 0 && strlen($buffer) > $this->options->maxHeaderBytes()) {
+                    throw new ProtocolException('HTTP response headers exceed configured limit.');
+                }
+
+                $buffer .= $this->readChunk($stream, $request);
+                $headerEnd = strpos($buffer, "\r\n\r\n");
+            }
+
+            if ($this->options->maxHeaderBytes() > 0 && $headerEnd + 4 > $this->options->maxHeaderBytes()) {
+                throw new ProtocolException('HTTP response headers exceed configured limit.');
+            }
+
+            $head = substr($buffer, 0, $headerEnd);
+            $rest = substr($buffer, $headerEnd + 4);
+            $lines = explode("\r\n", $head);
+            $statusLine = $lines[0] ?? '';
+
+            if (!preg_match('#^HTTP/(\d+(?:\.\d+)?)\s+(\d{3})\s*(.*)$#', $statusLine, $matches)) {
+                throw new ProtocolException('Invalid HTTP status line.');
+            }
+
+            $statusCode = (int)$matches[2];
+            if ($statusCode >= 100 && $statusCode < 200) {
+                $buffer = $rest;
+                continue;
+            }
+
+            return [
+                $statusCode,
+                $this->parseHeaders(array_slice($lines, 1)),
+                trim($matches[3]),
+                $matches[1],
+                $rest,
+            ];
+        }
+    }
+
+    /**
+     * @param array $lines
+     * @return array
+     */
+    private function parseHeaders(array $lines): array
+    {
+        $headers = [];
+        foreach ($lines as $line) {
+            if ($line === '') {
+                continue;
+            }
+            if (!str_contains($line, ':')) {
+                throw new ProtocolException('Invalid HTTP header line.');
+            }
+            [$name, $value] = explode(':', $line, 2);
+            $headers[trim($name)][] = trim($value);
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @param mixed $sink
+     * @return resource
+     */
+    private function openSink(mixed $sink): mixed
+    {
+        if (is_resource($sink)) {
+            return $sink;
+        }
+        if ($sink instanceof StreamInterface) {
+            return $sink;
+        }
+        if (is_string($sink)) {
+            $resource = fopen($sink, 'wb');
+            if (is_resource($resource)) {
+                return $resource;
+            }
+        }
+
+        throw new ProtocolException('Invalid response sink.');
+    }
+
+    /**
+     * @param mixed $sink
+     * @return StreamInterface
+     */
+    private function sinkBody(mixed $sink): StreamInterface
+    {
+        if ($sink instanceof StreamInterface) {
+            if ($sink->isSeekable()) {
+                $sink->rewind();
+            }
+            return $sink;
+        }
+        if (is_resource($sink)) {
+            rewind($sink);
+            return new BodyStream($sink);
+        }
+        if (is_string($sink)) {
+            $resource = fopen($sink, 'rb');
+            if (is_resource($resource)) {
+                return new BodyStream($resource);
+            }
+        }
+
+        return BodyStream::fromString('');
+    }
+
+    /**
+     * @param object $stream
+     * @param RequestInterface $request
+     * @param TransferOptions $transfer
+     * @param resource $sink
+     * @param string $buffer
+     * @param int $contentLength
+     * @return void
+     */
+    private function receiveFixedBody(object $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer, int $contentLength): void
+    {
+        $downloaded = 0;
+        if ($buffer !== '') {
+            $chunk = substr($buffer, 0, $contentLength);
+            $this->writeSink($sink, $chunk);
+            $downloaded += strlen($chunk);
+            $this->assertBodyLimit($downloaded);
+            $this->notifyProgress($transfer, $contentLength, $downloaded, $transfer->uploadTotal(), $transfer->uploadTotal());
+        }
+
+        while ($downloaded < $contentLength) {
+            $chunk = $this->readChunk($stream, $request);
+            $remaining = $contentLength - $downloaded;
+            if (strlen($chunk) > $remaining) {
+                $chunk = substr($chunk, 0, $remaining);
+            }
+            if ($chunk === '') {
+                continue;
+            }
+
+            $this->writeSink($sink, $chunk);
+            $downloaded += strlen($chunk);
+            $this->assertBodyLimit($downloaded);
+            $this->notifyProgress($transfer, $contentLength, $downloaded, $transfer->uploadTotal(), $transfer->uploadTotal());
+        }
+    }
+
+    /**
+     * @param object $stream
+     * @param RequestInterface $request
+     * @param TransferOptions $transfer
+     * @param resource $sink
+     * @param string $buffer
+     * @return int
+     */
+    private function receiveChunkedBody(object $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer): int
+    {
+        $downloaded = 0;
+        $offset = 0;
+
+        while (true) {
+            while (($lineEnd = strpos($buffer, "\r\n", $offset)) === false) {
+                $buffer .= $this->readChunk($stream, $request);
+            }
+
+            $line = trim(substr($buffer, $offset, $lineEnd - $offset));
+            $parts = explode(';', $line, 2);
+            $hex = trim($parts[0]);
+            if ($hex === '' || !ctype_xdigit($hex)) {
+                throw new ProtocolException('Invalid HTTP chunk size.');
+            }
+
+            $length = (int)hexdec($hex);
+            $offset = $lineEnd + 2;
+
+            if ($length === 0) {
+                while (strpos($buffer, "\r\n\r\n", $offset) === false && substr($buffer, $offset, 2) !== "\r\n") {
+                    $buffer .= $this->readChunk($stream, $request);
+                }
+                return $downloaded;
+            }
+
+            while (strlen($buffer) < $offset + $length + 2) {
+                $buffer .= $this->readChunk($stream, $request);
+            }
+
+            if (substr($buffer, $offset + $length, 2) !== "\r\n") {
+                throw new ProtocolException('Invalid HTTP chunk terminator.');
+            }
+
+            $chunk = substr($buffer, $offset, $length);
+            $this->writeSink($sink, $chunk);
+            $downloaded += $length;
+            $this->assertBodyLimit($downloaded);
+            $this->notifyProgress($transfer, 0, $downloaded, $transfer->uploadTotal(), $transfer->uploadTotal());
+            $offset += $length + 2;
+        }
+    }
+
+    /**
+     * @param resource $sink
+     * @param string $chunk
+     * @return void
+     */
+    private function writeSink(mixed $sink, string $chunk): void
+    {
+        if ($chunk === '') {
+            return;
+        }
+        if ($sink instanceof StreamInterface) {
+            $sink->write($chunk);
+            return;
+        }
+        if (fwrite($sink, $chunk) === false) {
+            throw new ProtocolException('Unable to write response sink.');
+        }
+    }
+
+    /**
+     * @param mixed $sink
+     * @return void
+     */
+    private function flushSink(mixed $sink): void
+    {
+        if (is_resource($sink)) {
+            fflush($sink);
+        }
+    }
+
+    /**
+     * @param int $bytes
+     * @return void
+     */
+    private function assertBodyLimit(int $bytes): void
+    {
+        if ($this->options->maxBodyBytes() > 0 && $bytes > $this->options->maxBodyBytes()) {
+            throw new ProtocolException('HTTP response body exceeds configured limit.');
+        }
+    }
+
+    /**
+     * @param array $headers
+     * @return int|null
+     */
+    private function contentLength(array $headers): ?int
+    {
+        $length = null;
+        foreach ($headers as $name => $values) {
+            if (strcasecmp((string)$name, 'Content-Length') !== 0) {
+                continue;
+            }
+            foreach ($values as $value) {
+                $current = (int)trim((string)$value);
+                if ($length !== null && $length !== $current) {
+                    throw new ProtocolException('Conflicting Content-Length headers.');
+                }
+                $length = $current;
+            }
+        }
+
+        return $length;
+    }
+
+    /**
+     * @param array $headers
+     * @return bool
+     */
+    private function isChunked(array $headers): bool
+    {
+        foreach ($headers as $name => $values) {
+            if (strcasecmp((string)$name, 'Transfer-Encoding') === 0 && stripos(implode(', ', $values), 'chunked') !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param RequestInterface $request
+     * @param int $statusCode
+     * @return bool
+     */
+    private function isNoBodyResponse(RequestInterface $request, int $statusCode): bool
+    {
+        return strtoupper($request->getMethod()) === 'HEAD' || $statusCode === 204 || $statusCode === 304;
+    }
+
+    /**
+     * @param array $headers
+     * @param string $name
+     * @return array
+     */
+    private function removeHeader(array $headers, string $name): array
+    {
+        foreach ($headers as $headerName => $_) {
+            if (strcasecmp((string)$headerName, $name) === 0) {
+                unset($headers[$headerName]);
+            }
+        }
+
+        return $headers;
     }
 
     /**

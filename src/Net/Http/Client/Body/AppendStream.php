@@ -9,6 +9,8 @@ use Throwable;
 use function count;
 use function strlen;
 
+use const SEEK_SET;
+
 class AppendStream implements StreamInterface
 {
     private int $current = 0;

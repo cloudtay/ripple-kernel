@@ -10,12 +10,18 @@ use Ripple\Net\Http\Response;
 use Ripple\Net\Http\Uri;
 use Throwable;
 
+use function array_shift;
+use function file_get_contents;
 use function gzencode;
 use function fclose;
 use function strlen;
 use function stream_set_blocking;
 use function stream_socket_pair;
+use function sys_get_temp_dir;
+use function tempnam;
+use function unlink;
 use function usleep;
+use function count;
 
 use const STREAM_IPPROTO_IP;
 use const STREAM_PF_UNIX;
@@ -244,5 +250,254 @@ final class ClientTest extends TestCase
             'json' => ['a' => 1],
             'body' => 'x',
         ]);
+    }
+
+    public function testClientWritesRequestBodyInChunksAndReportsUploadProgress(): void
+    {
+        $written = [];
+        $progress = [];
+        $client = new Client([
+            'upload_chunk_size' => 2,
+            'connector' => static function () use (&$written): object {
+                return new class ($written) {
+                    public function __construct(private array &$written)
+                    {
+                    }
+
+                    public function writeAll(string $bytes, ?float $timeout = null): int
+                    {
+                        $this->written[] = $bytes;
+                        return strlen($bytes);
+                    }
+
+                    public function read(int $length): string
+                    {
+                        return "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+                    }
+
+                    public function eof(): bool
+                    {
+                        return false;
+                    }
+
+                    public function close(): void
+                    {
+                    }
+                };
+            },
+        ]);
+
+        $client->post('http://example.com/', [
+            'body' => 'abcd',
+            'progress' => static function (int $downloadTotal, int $downloaded, int $uploadTotal, int $uploaded) use (&$progress): void {
+                $progress[] = [$downloadTotal, $downloaded, $uploadTotal, $uploaded];
+            },
+        ]);
+
+        self::assertStringContainsString("Content-Length: 4\r\n", $written[0]);
+        self::assertSame('ab', $written[1]);
+        self::assertSame('cd', $written[2]);
+        self::assertSame([0, 0, 4, 4], $progress[count($progress) - 1]);
+    }
+
+    public function testClientStreamsFixedLengthResponseToSink(): void
+    {
+        $sink = tempnam(sys_get_temp_dir(), 'ripple_sink_');
+        $progress = [];
+
+        try {
+            $client = new Client([
+                'connector' => static fn (): object => new class () {
+                    private array $chunks = [
+                        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nab",
+                        'cd',
+                        'ef',
+                    ];
+
+                    public function writeAll(string $bytes, ?float $timeout = null): int
+                    {
+                        return strlen($bytes);
+                    }
+
+                    public function read(int $length): string
+                    {
+                        return array_shift($this->chunks) ?? '';
+                    }
+
+                    public function close(): void
+                    {
+                    }
+                },
+            ]);
+
+            $response = $client->get('http://example.com/file', [
+                'sink' => $sink,
+                'progress' => static function (int $downloadTotal, int $downloaded, int $uploadTotal, int $uploaded) use (&$progress): void {
+                    $progress[] = [$downloadTotal, $downloaded, $uploadTotal, $uploaded];
+                },
+            ]);
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertSame('abcdef', file_get_contents($sink));
+            self::assertSame([6, 6, 0, 0], $progress[count($progress) - 1]);
+        } finally {
+            unlink($sink);
+        }
+    }
+
+    public function testClientStreamsChunkedResponseToSink(): void
+    {
+        $sink = tempnam(sys_get_temp_dir(), 'ripple_sink_');
+
+        try {
+            $client = new Client([
+                'connector' => static fn (): object => new class () {
+                    private array $chunks = [
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2;foo=bar\r\nab\r\n",
+                        "4\r\ncdef\r\n0\r\nX-Trailer: yes\r\n\r\n",
+                    ];
+
+                    public function writeAll(string $bytes, ?float $timeout = null): int
+                    {
+                        return strlen($bytes);
+                    }
+
+                    public function read(int $length): string
+                    {
+                        return array_shift($this->chunks) ?? '';
+                    }
+
+                    public function close(): void
+                    {
+                    }
+                },
+            ]);
+
+            $response = $client->get('http://example.com/file', [
+                'sink' => $sink,
+            ]);
+
+            self::assertSame(200, $response->getStatusCode());
+            self::assertFalse($response->hasHeader('Transfer-Encoding'));
+            self::assertSame('6', $response->getHeaderLine('Content-Length'));
+            self::assertSame('abcdef', file_get_contents($sink));
+        } finally {
+            unlink($sink);
+        }
+    }
+
+    public function testClientRejectsSinkResponseWithUnknownLength(): void
+    {
+        $sink = tempnam(sys_get_temp_dir(), 'ripple_sink_');
+
+        try {
+            $client = new Client([
+                'connector' => static fn (): object => new class () {
+                    public function writeAll(string $bytes, ?float $timeout = null): int
+                    {
+                        return strlen($bytes);
+                    }
+
+                    public function read(int $length): string
+                    {
+                        return "HTTP/1.1 200 OK\r\n\r\nbody";
+                    }
+
+                    public function close(): void
+                    {
+                    }
+                },
+            ]);
+
+            $this->expectException(\Ripple\Net\Http\Exception\ProtocolException::class);
+            $client->get('http://example.com/file', [
+                'sink' => $sink,
+            ]);
+        } finally {
+            unlink($sink);
+        }
+    }
+
+    public function testClientReturnsNetworkStreamWhenStreamOptionIsEnabled(): void
+    {
+        $closed = false;
+        $reads = 0;
+        $client = new Client([
+            'connector' => static function () use (&$closed, &$reads): object {
+                return new class ($closed, $reads) {
+                    private array $chunks = [
+                        "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nab",
+                        'cd',
+                        'ef',
+                    ];
+
+                    public function __construct(private bool &$closed, private int &$reads)
+                    {
+                    }
+
+                    public function writeAll(string $bytes, ?float $timeout = null): int
+                    {
+                        return strlen($bytes);
+                    }
+
+                    public function read(int $length): string
+                    {
+                        $this->reads++;
+                        return array_shift($this->chunks) ?? '';
+                    }
+
+                    public function close(): void
+                    {
+                        $this->closed = true;
+                    }
+                };
+            },
+        ]);
+
+        $response = $client->get('http://example.com/file', [
+            'stream' => true,
+        ]);
+
+        self::assertSame(200, $response->getStatusCode());
+        self::assertFalse($closed);
+        self::assertSame(1, $reads);
+        self::assertSame('abcdef', $response->getBody()->getContents());
+        self::assertFalse($closed);
+
+        $response->getBody()->close();
+        self::assertTrue($closed);
+    }
+
+    public function testClientReturnsDecodedChunkedNetworkStream(): void
+    {
+        $client = new Client([
+            'connector' => static fn (): object => new class () {
+                private array $chunks = [
+                    "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nab\r\n",
+                    "4\r\ncdef\r\n0\r\n\r\n",
+                ];
+
+                public function writeAll(string $bytes, ?float $timeout = null): int
+                {
+                    return strlen($bytes);
+                }
+
+                public function read(int $length): string
+                {
+                    return array_shift($this->chunks) ?? '';
+                }
+
+                public function close(): void
+                {
+                }
+            },
+        ]);
+
+        $response = $client->get('http://example.com/file', [
+            'stream' => true,
+        ]);
+
+        self::assertFalse($response->hasHeader('Transfer-Encoding'));
+        self::assertSame('abcdef', $response->getBody()->getContents());
     }
 }

@@ -21,6 +21,11 @@ final class RequestSerializer
      */
     public function serialize(RequestInterface $request): string
     {
+        return $this->serializeHeaders($request) . (string)$request->getBody();
+    }
+
+    public function serializeHeaders(RequestInterface $request): string
+    {
         $target = $request->getRequestTarget();
         $bytes = sprintf(
             "%s %s HTTP/%s\r\n",
@@ -29,6 +34,21 @@ final class RequestSerializer
             $request->getProtocolVersion()
         );
 
+        $headers = $this->prepareHeaders($request);
+        foreach ($headers as $name => $values) {
+            $this->assertHeaderName($request, (string)$name);
+            foreach ((array)$values as $value) {
+                $value = (string)$value;
+                $this->assertHeaderValue($request, $value);
+                $bytes .= "{$name}: {$value}\r\n";
+            }
+        }
+
+        return $bytes . "\r\n";
+    }
+
+    private function prepareHeaders(RequestInterface $request): array
+    {
         $headers = $request->getHeaders();
         if (!$request->hasHeader('Host') && $request->getUri()->getHost() !== '') {
             $headers = ['Host' => [$request->getUri()->getAuthority()]] + $headers;
@@ -47,21 +67,17 @@ final class RequestSerializer
             throw new RequestException('Request Transfer-Encoding is not supported in this client pass.', $request);
         }
 
-        $body = (string)$request->getBody();
-        if ($body !== '' && !$this->hasHeader($headers, 'Content-Length')) {
-            $headers['Content-Length'] = [(string)strlen($body)];
-        }
-
-        foreach ($headers as $name => $values) {
-            $this->assertHeaderName($request, (string)$name);
-            foreach ((array)$values as $value) {
-                $value = (string)$value;
-                $this->assertHeaderValue($request, $value);
-                $bytes .= "{$name}: {$value}\r\n";
+        $bodySize = $request->getBody()->getSize();
+        if ($bodySize !== null && $bodySize > 0 && !$this->hasHeader($headers, 'Content-Length')) {
+            $headers['Content-Length'] = [(string)$bodySize];
+        } elseif ($bodySize === null) {
+            $body = (string)$request->getBody();
+            if ($body !== '' && !$this->hasHeader($headers, 'Content-Length')) {
+                $headers['Content-Length'] = [(string)strlen($body)];
             }
         }
 
-        return $bytes . "\r\n" . $body;
+        return $headers;
     }
 
     private function hasHeader(array $headers, string $name): bool
