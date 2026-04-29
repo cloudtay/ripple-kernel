@@ -3,6 +3,7 @@
 namespace Ripple\Tests\Net\Http;
 
 use PHPUnit\Framework\TestCase;
+use Ripple\Net\Http\BodyStream;
 use Ripple\Net\Http\Client\Client;
 use Ripple\Net\Http\Request;
 use Ripple\Net\Http\Response;
@@ -218,5 +219,30 @@ final class ClientTest extends TestCase
         \Co\wait();
 
         self::assertInstanceOf(\Ripple\Net\Http\Exception\TimeoutException::class, $thrown);
+    }
+
+    public function testRequestBuilderCreatesMultipartRequestWithLength(): void
+    {
+        $builder = new \Ripple\Net\Http\Client\RequestBuilder();
+
+        [$request, $transfer] = $builder->build('POST', 'http://example.com/upload', [
+            'multipart' => [
+                ['name' => 'file', 'contents' => BodyStream::fromString('abc'), 'filename' => 'a.txt'],
+            ],
+        ]);
+
+        self::assertStringContainsString('multipart/form-data; boundary=', $request->getHeaderLine('Content-Type'));
+        self::assertGreaterThan(0, (int)$request->getHeaderLine('Content-Length'));
+        self::assertSame((int)$request->getHeaderLine('Content-Length'), $transfer->uploadTotal());
+    }
+
+    public function testRequestBuilderRejectsConflictingBodyOptions(): void
+    {
+        $this->expectException(\Ripple\Net\Http\Exception\RequestException::class);
+
+        (new \Ripple\Net\Http\Client\RequestBuilder())->build('POST', 'http://example.com/', [
+            'json' => ['a' => 1],
+            'body' => 'x',
+        ]);
     }
 }
