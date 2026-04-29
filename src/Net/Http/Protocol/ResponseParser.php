@@ -2,21 +2,24 @@
 
 namespace Ripple\Net\Http\Protocol;
 
+use Psr\Http\Message\MessageInterface;
+use Ripple\Net\Http\Exception\ProtocolException;
 use Ripple\Net\Http\Response;
-use RuntimeException;
 
+use function array_slice;
 use function ctype_xdigit;
 use function explode;
 use function hexdec;
+use function implode;
 use function preg_match;
-use function str_contains;
+use function strcasecmp;
 use function stripos;
 use function strlen;
 use function strpos;
+use function strtoupper;
 use function substr;
 use function trim;
-use function count;
-use function implode;
+use function str_contains;
 
 final class ResponseParser
 {
@@ -26,15 +29,30 @@ final class ResponseParser
     private string $buffer = '';
 
     /**
-     * @param string $chunk
-     * @return array
+     * @var array{0:int,1:array,2:string,3:string}|null
+     */
+    private ?array $closeDelimited = null;
+
+    public function __construct(
+        private readonly string $method = 'GET',
+        private readonly int $maxHeaderBytes = 65536,
+        private readonly int $maxBodyBytes = 0
+    ) {
+    }
+
+    /**
+     * @return Response[]
      */
     public function push(string $chunk): array
     {
         $this->buffer .= $chunk;
-        $responses = [];
+        $this->assertHeaderLimit();
 
+        $responses = [];
         while (($response = $this->tryParseOne()) instanceof Response) {
+            if ($response->getStatusCode() >= 100 && $response->getStatusCode() < 200) {
+                continue;
+            }
             $responses[] = $response;
         }
 
@@ -42,13 +60,43 @@ final class ResponseParser
     }
 
     /**
+     * @return Response[]
+     */
+    public function finish(): array
+    {
+        if ($this->closeDelimited === null) {
+            return [];
+        }
+
+        $body = $this->buffer;
+        $this->assertBodyLimit(strlen($body));
+        $this->buffer = '';
+
+        [$statusCode, $headers, $reasonPhrase, $protocolVersion] = $this->closeDelimited;
+        $this->closeDelimited = null;
+
+        return [
+            (new Response($statusCode, $headers, $body, $reasonPhrase))->withProtocolVersion($protocolVersion),
+        ];
+    }
+
+    /**
      * @return Response|null
      */
-    private function tryParseOne(): ?Response
+    private function tryParseOne(): MessageInterface|null
     {
+        if ($this->closeDelimited !== null) {
+            $this->assertBodyLimit(strlen($this->buffer));
+            return null;
+        }
+
         $headerEnd = strpos($this->buffer, "\r\n\r\n");
         if ($headerEnd === false) {
+            $this->assertHeaderLimit();
             return null;
+        }
+        if ($this->maxHeaderBytes > 0 && $headerEnd + 4 > $this->maxHeaderBytes) {
+            throw new ProtocolException('HTTP response headers exceed configured limit.');
         }
 
         $head = substr($this->buffer, 0, $headerEnd);
@@ -57,57 +105,121 @@ final class ResponseParser
         $statusLine = $lines[0] ?? '';
 
         if (!preg_match('#^HTTP/(\d+(?:\.\d+)?)\s+(\d{3})\s*(.*)$#', $statusLine, $matches)) {
-            throw new RuntimeException('Invalid HTTP status line.');
+            throw new ProtocolException('Invalid HTTP status line.');
         }
 
-        $headers = [];
-        for ($i = 1; $i < count($lines); $i++) {
-            if (!str_contains($lines[$i], ':')) {
-                continue;
-            }
-            [$name, $value] = explode(':', $lines[$i], 2);
-            $headers[trim($name)][] = trim($value);
+        $headers = $this->parseHeaders(array_slice($lines, 1));
+        $statusCode = (int)$matches[2];
+        $protocolVersion = $matches[1];
+        $reasonPhrase = trim($matches[3]);
+
+        if ($statusCode >= 100 && $statusCode < 200) {
+            $this->buffer = $rest;
+            return (new Response($statusCode, $headers, '', $reasonPhrase))->withProtocolVersion($protocolVersion);
         }
 
-        $body = null;
-        $consumed = 0;
-        $isChunked = false;
-        $contentLength = null;
-
-        foreach ($headers as $name => $values) {
-            if (stripos($name, 'Transfer-Encoding') === 0 && stripos(implode(', ', $values), 'chunked') !== false) {
-                $isChunked = true;
-            }
-            if (stripos($name, 'Content-Length') === 0) {
-                $contentLength = (int)$values[0];
-            }
+        if ($this->isNoBodyResponse($statusCode)) {
+            $this->buffer = $rest;
+            return (new Response($statusCode, $headers, '', $reasonPhrase))->withProtocolVersion($protocolVersion);
         }
+
+        $isChunked = $this->isChunked($headers);
+        $contentLength = $this->contentLength($headers);
 
         if ($isChunked) {
             [$body, $consumed] = $this->parseChunked($rest);
             if ($body === null) {
                 return null;
             }
-            foreach ($headers as $name => $_) {
-                if (stripos($name, 'Transfer-Encoding') === 0) {
-                    unset($headers[$name]);
-                }
-            }
-        } elseif ($contentLength !== null) {
-            if (strlen($rest) < $contentLength) {
-                return null;
-            }
-            $body = substr($rest, 0, $contentLength);
-            $consumed = $contentLength;
-        } else {
-            $body = '';
-            $consumed = 0;
+            $this->assertBodyLimit(strlen($body));
+            $headers = $this->removeHeader($headers, 'Transfer-Encoding');
+            $this->buffer = substr($rest, $consumed);
+            return (new Response($statusCode, $headers, $body, $reasonPhrase))->withProtocolVersion($protocolVersion);
         }
 
-        $this->buffer = substr($rest, $consumed);
+        if ($contentLength !== null) {
+            if (strlen($rest) < $contentLength) {
+                $this->assertBodyLimit(strlen($rest));
+                return null;
+            }
+            $this->assertBodyLimit($contentLength);
+            $body = substr($rest, 0, $contentLength);
+            $this->buffer = substr($rest, $contentLength);
+            return (new Response($statusCode, $headers, $body, $reasonPhrase))->withProtocolVersion($protocolVersion);
+        }
 
-        return (new Response((int)$matches[2], $headers, $body, trim($matches[3])))
-            ->withProtocolVersion($matches[1]);
+        $this->closeDelimited = [$statusCode, $headers, $reasonPhrase, $protocolVersion];
+        $this->buffer = $rest;
+        $this->assertBodyLimit(strlen($this->buffer));
+        return null;
+    }
+
+    /**
+     * @param array $lines
+     * @return array
+     */
+    private function parseHeaders(array $lines): array
+    {
+        $headers = [];
+        foreach ($lines as $line) {
+            if ($line === '') {
+                continue;
+            }
+            if (!str_contains($line, ':')) {
+                throw new ProtocolException('Invalid HTTP header line.');
+            }
+            [$name, $value] = explode(':', $line, 2);
+            $headers[trim($name)][] = trim($value);
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @param array $headers
+     * @return int|null
+     */
+    private function contentLength(array $headers): ?int
+    {
+        $length = null;
+        foreach ($headers as $name => $values) {
+            if (strcasecmp((string)$name, 'Content-Length') !== 0) {
+                continue;
+            }
+            foreach ($values as $value) {
+                $current = (int)trim((string)$value);
+                if ($length !== null && $length !== $current) {
+                    throw new ProtocolException('Conflicting Content-Length headers.');
+                }
+                $length = $current;
+            }
+        }
+
+        return $length;
+    }
+
+    /**
+     * @param array $headers
+     * @return bool
+     */
+    private function isChunked(array $headers): bool
+    {
+        foreach ($headers as $name => $values) {
+            if (strcasecmp((string)$name, 'Transfer-Encoding') === 0 && stripos(implode(', ', $values), 'chunked') !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param int $statusCode
+     * @return bool
+     */
+    private function isNoBodyResponse(int $statusCode): bool
+    {
+        return strtoupper($this->method) === 'HEAD' || $statusCode === 204 || $statusCode === 304;
     }
 
     /**
@@ -125,24 +237,76 @@ final class ResponseParser
                 return [null, 0];
             }
 
-            $hex = trim(substr($buffer, $offset, $lineEnd - $offset));
+            $line = trim(substr($buffer, $offset, $lineEnd - $offset));
+            $parts = explode(';', $line, 2);
+            $hex = trim($parts[0]);
             if ($hex === '' || !ctype_xdigit($hex)) {
-                throw new RuntimeException('Invalid HTTP chunk size.');
+                throw new ProtocolException('Invalid HTTP chunk size.');
             }
 
             $length = (int)hexdec($hex);
             $offset = $lineEnd + 2;
 
+            if ($length === 0) {
+                $trailerEnd = strpos($buffer, "\r\n\r\n", $offset);
+                if ($trailerEnd === false) {
+                    if (substr($buffer, $offset, 2) === "\r\n") {
+                        return [$body, $offset + 2];
+                    }
+                    return [null, 0];
+                }
+
+                return [$body, $trailerEnd + 4];
+            }
+
             if (strlen($buffer) < $offset + $length + 2) {
                 return [null, 0];
             }
 
-            if ($length === 0) {
-                return [$body, $offset + 2];
+            if (substr($buffer, $offset + $length, 2) !== "\r\n") {
+                throw new ProtocolException('Invalid HTTP chunk terminator.');
             }
 
             $body .= substr($buffer, $offset, $length);
+            $this->assertBodyLimit(strlen($body));
             $offset += $length + 2;
+        }
+    }
+
+    /**
+     * @param array $headers
+     * @param string $name
+     * @return array
+     */
+    private function removeHeader(array $headers, string $name): array
+    {
+        foreach ($headers as $headerName => $_) {
+            if (strcasecmp((string)$headerName, $name) === 0) {
+                unset($headers[$headerName]);
+            }
+        }
+
+        return $headers;
+    }
+
+    /**
+     * @return void
+     */
+    private function assertHeaderLimit(): void
+    {
+        if ($this->maxHeaderBytes > 0 && !str_contains($this->buffer, "\r\n\r\n") && strlen($this->buffer) > $this->maxHeaderBytes) {
+            throw new ProtocolException('HTTP response headers exceed configured limit.');
+        }
+    }
+
+    /**
+     * @param int $bytes
+     * @return void
+     */
+    private function assertBodyLimit(int $bytes): void
+    {
+        if ($this->maxBodyBytes > 0 && $bytes > $this->maxBodyBytes) {
+            throw new ProtocolException('HTTP response body exceeds configured limit.');
         }
     }
 }

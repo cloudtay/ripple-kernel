@@ -258,7 +258,7 @@ final class BodyStream implements StreamInterface
      * @param string|null $key 元数据键名
      * @return mixed
      */
-    public function getMetadata(?string $key = null)
+    public function getMetadata(?string $key = null): mixed
     {
         if (!$this->resource) {
             return $key === null ? [] : null;

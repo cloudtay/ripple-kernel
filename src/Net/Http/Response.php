@@ -391,7 +391,7 @@ final class Response implements ResponseInterface
      * @param string $name
      * @return Response
      */
-    public function removeHeader(string $name): Response
+    public function removeHeader(string $name): MessageInterface
     {
         return $this->withoutHeader($name);
     }
@@ -466,9 +466,9 @@ final class Response implements ResponseInterface
     /**
      * @param Response $response
      * @param string $content
-     * @return self
+     * @return Response
      */
-    private static function withContentLength(self $response, string $content): self
+    private static function withContentLength(self $response, string $content): MessageInterface
     {
         return $response->withHeader('Content-Length', (string)strlen($content));
     }
