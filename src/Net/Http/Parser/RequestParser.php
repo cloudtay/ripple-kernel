@@ -10,49 +10,37 @@
  * Contributions, suggestions, and feedback are always welcome!
  */
 
-namespace Ripple\Net\Http\Server;
+namespace Ripple\Net\Http\Parser;
 
-use Ripple\Net\Http\Request;
-use Ripple\Runtime\Scheduler;
-use RuntimeException;
-use Ripple\Net\Http\Enum\Method;
-use Ripple\Net\Http\Server;
 use Ripple\Net\Exception\FormatException;
-use Ripple\Net\Http\Server\Upload\FormData;
-use Ripple\Runtime\Support\Stdin;
-use Ripple\Stream;
-use Ripple\Stream\Exception\ConnectionException;
-use Throwable;
+use Ripple\Net\Http\Enum\Method;
+use RuntimeException;
 
 use function array_merge;
 use function count;
+use function ctype_upper;
 use function explode;
+use function intval;
 use function json_decode;
 use function max;
 use function parse_str;
+use function parse_url;
 use function preg_match;
+use function rawurldecode;
 use function str_contains;
+use function str_ends_with;
+use function str_starts_with;
 use function strlen;
 use function strpos;
-use function strtok;
 use function strtoupper;
+use function strtok;
 use function substr;
-use function strtolower;
-use function ctype_upper;
-use function str_starts_with;
-use function parse_url;
-use function strtr;
-use function intval;
-use function rawurldecode;
 use function trim;
-use function str_ends_with;
+use function strtr;
 
 use const PHP_URL_PATH;
 
-/**
- * HTTP连接处理器
- */
-class Connection
+final class RequestParser
 {
     private const COMMON_HEADERS = [
         'HOST' => 'HTTP_HOST',
@@ -65,169 +53,78 @@ class Connection
         'CONTENT-LENGTH' => 'HTTP_CONTENT_LENGTH',
     ];
 
-    /**
-     * 步骤常量
-     */
-    private const STEP_INITIAL = 0;        // 初始
-    private const STEP_CONTINUOUS = 1;     // 连续传输
-    private const STEP_COMPLETE = 2;       // 完成步骤
-    private const STEP_FILE_TRANSFER = 3;  // 文件传输步骤
+    private const STEP_INITIAL = 0;
+    private const STEP_CONTINUOUS = 1;
+    private const STEP_COMPLETE = 2;
+    private const STEP_FILE_TRANSFER = 3;
 
-    /**
-     * 请求解析步骤
-     * @var int
-     */
     private int $step;
 
-    /**
-     * Query 查询参数数组
-     * @var array
-     */
     private array $get;
 
-    /**
-     * 请求体参数数组
-     * @var array
-     */
     private array $post;
 
-    /**
-     * 请求属性数组
-     * @var array
-     */
     private array $attributes;
 
-    /**
-     * Cookie 数组
-     * @var array
-     */
     private array $cookies;
 
-    /**
-     * 上传文件数组
-     * @var array
-     */
     private array $files;
 
-    /**
-     * HTTP 请求体内容
-     * @var mixed
-     */
     private mixed $content;
 
-    /**
-     * 数据接收缓冲区
-     * @var string
-     */
     private string $buf = '';
 
-    /**
-     * Multipart数据处理器
-     * @var FormData|null
-     */
-    private FormData|null $multipart;
+    private FormDataParser|null $multipart;
 
-    /**
-     * 已接收的请求体长度
-     * @var int
-     */
     private int $bodySize;
 
-    /**
-     * 请求体总长度
-     * @var int
-     */
     private int $contentLength;
 
-    /**
-     * @var mixed|string
-     */
     private string $contentType;
 
-    /**
-     * @var Method
-     */
     private Method $method;
 
-    /**
-     * @var array
-     */
-    private readonly array $alwaysMeta;
+    private array $meta;
 
-    /**
-     * 构造函数
-     * @param Stream $stream 流对象
-     * @param array $meta 服务器信息
-     */
-    public function __construct(
-        public readonly Stream  $stream,
-        private readonly Server $server,
-        private array           $meta = []
-    ) {
-        $this->alwaysMeta = $this->meta;
+    public function __construct(private readonly array $alwaysMeta = [])
+    {
         $this->reset();
     }
 
     /**
-     * 重置连接状态
-     * @return void
+     * @return array<int,array{get:array,post:array,attributes:array,cookies:array,files:array,server:array,content:mixed}>
+     * @throws FormatException
+     * @throws RuntimeException
      */
+    public function push(string $content): array
+    {
+        return $this->fill($content);
+    }
+
     private function reset(): void
     {
-        $this->step             = self::STEP_INITIAL;
-        $this->get            = [];
-        $this->post          = [];
-        $this->attributes       = [];
-        $this->cookies          = [];
-        $this->files            = [];
-        $this->meta             = $this->alwaysMeta;
-        $this->content          = null;
-        $this->multipart        = null;
-        $this->bodySize         = 0;
-        $this->contentLength    = 0;
+        $this->step = self::STEP_INITIAL;
+        $this->get = [];
+        $this->post = [];
+        $this->attributes = [];
+        $this->cookies = [];
+        $this->files = [];
+        $this->meta = $this->alwaysMeta;
+        $this->content = '';
+        $this->multipart = null;
+        $this->bodySize = 0;
+        $this->contentLength = 0;
+        $this->contentType = '';
     }
 
     /**
-     * 启动连接处理
-     * @return void
-     */
-    public function start(): void
-    {
-        try {
-            $this->stream->watchRead(function () {
-                try {
-                    $content = $this->stream->read(8192);
-                    if ($content === '' && $this->stream->eof()) {
-                        throw new ConnectionException();
-                    }
-
-                    foreach ($this->fill($content) as $req) {
-                        $this->onRequest($req);
-                    }
-                } catch (Throwable $e) {
-                    if (!$e instanceof ConnectionException) {
-                        Stdin::println($e->getMessage());
-                    }
-
-                    $this->stream->close();
-                }
-            });
-        } catch (ConnectionException) {
-            $this->stream->close();
-        }
-    }
-
-    /**
-     * 处理接收到的数据
-     * @param string $content 接收的数据
-     * @return Request[] 解析出的请求列表
-     * @throws FormatException 格式异常
-     * @throws RuntimeException 运行时异常
+     * @return array<int,array{get:array,post:array,attributes:array,cookies:array,files:array,server:array,content:mixed}>
+     * @throws FormatException
+     * @throws RuntimeException
      */
     private function fill(string $content): array
     {
         $reqs = [];
-
         $this->buf .= $content;
 
         if ($this->step === self::STEP_INITIAL) {
@@ -243,16 +140,7 @@ class Connection
         }
 
         if ($this->step === self::STEP_COMPLETE) {
-            $reqInfo = $this->completeRequest();
-            $reqs[] =  new Request(
-                $reqInfo['get'],
-                $reqInfo['post'],
-                $reqInfo['cookies'],
-                $reqInfo['files'],
-                $reqInfo['server'],
-                $reqInfo['content'],
-                $this,
-            );
+            $reqs[] = $this->completeRequest();
 
             if ($this->buf !== '') {
                 foreach ($this->fill('') as $item) {
@@ -265,31 +153,26 @@ class Connection
     }
 
     /**
-     * 处理初始步骤
-     * @return void
-     * @throws FormatException 格式异常
-     * @throws RuntimeException 运行时异常
+     * @throws FormatException
+     * @throws RuntimeException
      */
     private function initialStep(): void
     {
         if ($headerEnd = strpos($this->buf, "\r\n\r\n")) {
-
             $buffer = $this->readBuffer();
 
             $this->step = self::STEP_CONTINUOUS;
-            $header     = substr($buffer, 0, $headerEnd);
-            $firstLine  = strtok($header, "\r\n");
+            $header = substr($buffer, 0, $headerEnd);
+            $firstLine = strtok($header, "\r\n");
 
             if (count($base = explode(' ', $firstLine)) !== 3) {
                 throw new RuntimeException('Request head is not match: ' . $firstLine);
             }
 
-            // 方法应该是大写字母
             if (!ctype_upper($base[0])) {
                 throw new RuntimeException('Invalid HTTP method: ' . $base[0]);
             }
 
-            // 版本格式
             if (!str_starts_with($base[2], 'HTTP/')) {
                 throw new RuntimeException('Invalid HTTP version: ' . $base[2]);
             }
@@ -313,10 +196,9 @@ class Connection
                     throw new RuntimeException('boundary is not set');
                 }
 
-                $boundary = $matches[1];
                 $this->step = self::STEP_FILE_TRANSFER;
                 if (!isset($this->multipart)) {
-                    $this->multipart = new FormData($boundary);
+                    $this->multipart = new FormDataParser($matches[1]);
                 }
             } else {
                 $this->step = self::STEP_CONTINUOUS;
@@ -324,15 +206,10 @@ class Connection
         }
     }
 
-    /**
-     * 读取缓冲区数据
-     * @param int $length 读取长度
-     * @return string 读取的数据
-     */
     private function readBuffer(int $length = 0): string
     {
         if ($length === 0) {
-            $buffer   = $this->buf;
+            $buffer = $this->buf;
             $this->buf = '';
             return $buffer;
         }
@@ -342,39 +219,25 @@ class Connection
         return $buffer;
     }
 
-    /**
-     * 初始化请求参数
-     * @param array $base 基础参数
-     * @return void
-     */
     private function initParams(array $base): void
     {
         $urlExp = explode('?', $base[1]);
-        $path   = parse_url($base[1], PHP_URL_PATH);
+        $path = parse_url($base[1], PHP_URL_PATH);
 
         if (isset($urlExp[1])) {
             $this->parseQuery($urlExp[1]);
         }
 
-        $this->meta['REQUEST_URI']     = $path;
-        $this->meta['REQUEST_METHOD']  = $base[0];
+        $this->meta['REQUEST_URI'] = $path;
+        $this->meta['REQUEST_METHOD'] = $base[0];
         $this->meta['SERVER_PROTOCOL'] = $base[2];
     }
 
-    /**
-     * 解析查询字符串
-     * @param string $queryStr 查询字符串
-     * @return void
-     */
     private function parseQuery(string $queryStr): void
     {
         parse_str($queryStr, $this->get);
     }
 
-    /**
-     * 解析HTTP头部
-     * @return void
-     */
     private function parseHeaders(): void
     {
         while ($line = strtok("\r\n")) {
@@ -392,11 +255,6 @@ class Connection
         }
     }
 
-    /**
-     * 处理连续传输
-     * @return void
-     * @throws RuntimeException 运行时异常
-     */
     private function receiveBody(): void
     {
         if ($buffer = $this->readBuffer(max(0, $this->contentLength - $this->bodySize))) {
@@ -407,11 +265,6 @@ class Connection
         $this->checkContentLength();
     }
 
-    /**
-     * 验证内容长度
-     * @return void
-     * @throws RuntimeException 运行时异常
-     */
     private function checkContentLength(): void
     {
         if ($this->bodySize === $this->contentLength) {
@@ -422,10 +275,8 @@ class Connection
     }
 
     /**
-     * 处理文件传输
-     * @return void
-     * @throws FormatException 格式异常
-     * @throws RuntimeException 运行时异常
+     * @throws FormatException
+     * @throws RuntimeException
      */
     private function processFormData(): void
     {
@@ -458,10 +309,6 @@ class Connection
         $this->checkContentLength();
     }
 
-    /**
-     * 完成请求处理
-     * @return array 请求数据
-     */
     private function completeRequest(): array
     {
         $this->parseCookies();
@@ -469,23 +316,19 @@ class Connection
         $this->parseXfp();
 
         $result = [
-            'get'        => $this->get,
-            'post'       => $this->post,
+            'get' => $this->get,
+            'post' => $this->post,
             'attributes' => $this->attributes,
-            'cookies'    => $this->cookies,
-            'files'      => $this->files,
-            'server'     => $this->meta,
-            'content'    => $this->content,
+            'cookies' => $this->cookies,
+            'files' => $this->files,
+            'server' => $this->meta,
+            'content' => $this->content,
         ];
 
         $this->reset();
         return $result;
     }
 
-    /**
-     * 解析 Cookie
-     * @return void
-     */
     private function parseCookies(): void
     {
         $this->cookies = [];
@@ -498,86 +341,33 @@ class Connection
                 }
 
                 [$name, $value] = explode('=', $pair, 2);
-
-                $name  = trim($name);
+                $name = trim($name);
                 $value = trim($value);
 
                 if ($name === '') {
                     continue;
                 }
 
-                $name  = rawurldecode($name);
-                $value = rawurldecode($value);
-                $this->cookies[$name] = $value;
+                $this->cookies[rawurldecode($name)] = rawurldecode($value);
             }
         }
     }
 
-    /**
-     * 解析请求体
-     * @return void
-     */
     private function parseRequestBody(): void
     {
         if ($this->method->value === 'POST') {
             if (str_contains($this->contentType, 'application/json')) {
-                $this->post = array_merge($this->post, json_decode($this->content ?? '', true) ?? []);
+                $this->post = array_merge($this->post, json_decode($this->content, true) ?? []);
             } elseif ($this->contentType === 'application/x-www-form-urlencoded') {
                 parse_str($this->content, $this->post);
             }
         }
     }
 
-    /**
-     * 设置用户IP信息
-     * @return void
-     * @deprecated
-     */
     private function parseXfp(): void
     {
         if ($xfw = $this->meta['HTTP_X_FORWARDED_PROTO'] ?? null) {
             $this->meta['HTTPS'] = $xfw === 'https' ? 'on' : 'off';
         }
-    }
-
-    /**
-     * 处理 HTTP 请求
-     * @param Request $req 请求信息
-     * @return void
-     * @throws ConnectionException
-     */
-    private function onRequest(Request $req): void
-    {
-        $response = $req->response();
-        $response->withHeader('Server', 'ripple');
-
-        // 半关闭检测
-        $connHeader = $reqInfo['server']['HTTP_CONNECTION'] ?? '';
-        $upgradeHeader = $reqInfo['server']['HTTP_UPGRADE'] ?? '';
-        $keepAlive = strtolower($connHeader) !== 'close';
-        $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' && str_contains(strtolower($connHeader), 'upgrade');
-
-        if ($keepAlive || $isWebSocketUpgrade) {
-            $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
-        } else {
-            $response->withHeader('Connection', 'close');
-        }
-
-        try {
-            Scheduler::resume($this->server->acquireCoroutine(), $req)->rethrow();
-        } catch (ConnectionException $exception) {
-            throw $exception;
-        } catch (Throwable $exception) {
-            $req->respond($exception->getMessage(), [], 500);
-            $this->reset();
-        }
-    }
-
-    /**
-     * @return bool
-     */
-    public function isClosed(): bool
-    {
-        return $this->stream->isClosed();
     }
 }

@@ -12,8 +12,9 @@
 
 namespace Ripple\Net\Http;
 
-use Ripple\Net\Http\Server\Connection;
+use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
+use RuntimeException;
 
 use function array_merge;
 use function is_string;
@@ -32,22 +33,22 @@ class Request
 
     /**
      * 构造请求实体
-     * @param ?Connection $conn
      * @param array $GET
      * @param array $POST
      * @param array $COOKIE
      * @param array $FILES
      * @param array $SERVER
      * @param mixed|null $CONTENT
+     * @param Stream|null $stream
      */
     public function __construct(
-        public readonly array      $GET = [],
-        public readonly array      $POST = [],
-        public readonly array      $COOKIE = [],
-        public readonly array      $FILES = [],
-        public readonly array      $SERVER = [],
-        public readonly mixed      $CONTENT = null,
-        public readonly ?Connection $conn = null,
+        public readonly array   $GET = [],
+        public readonly array   $POST = [],
+        public readonly array   $COOKIE = [],
+        public readonly array   $FILES = [],
+        public readonly array   $SERVER = [],
+        public readonly mixed   $CONTENT = null,
+        private readonly ?Stream $stream = null,
     ) {
         $this->REQUEST = array_merge($this->GET, $this->POST);
     }
@@ -137,9 +138,22 @@ class Request
     public function response(): Response
     {
         if (!isset($this->response)) {
-            $this->response = (new Response())->withStream($this->conn->stream);
+            $this->response = (new Response())->withStream($this->stream());
         }
 
         return $this->response;
+    }
+
+    /**
+     * 获取底层请求流
+     * @return Stream
+     */
+    public function stream(): Stream
+    {
+        if (!$this->stream instanceof Stream) {
+            throw new RuntimeException('Request stream is not available.');
+        }
+
+        return $this->stream;
     }
 }

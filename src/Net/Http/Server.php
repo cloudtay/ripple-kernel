@@ -16,8 +16,8 @@ use Closure;
 use InvalidArgumentException;
 use Ripple\Coroutine;
 use Ripple\Event;
-use Ripple\Net\Http\Server\Connection;
 use Ripple\Runtime\HotCoroutinePool;
+use Ripple\Runtime\Scheduler;
 use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
 use UnexpectedValueException;
@@ -112,7 +112,11 @@ class Server
             call_user_func($this->onRequest, suspend());
         }, 200);
 
-        $this->watchId = Event::watchRead($this->server, function () {
+        $dispatcher = function (Request $request): void {
+            Scheduler::resume($this->acquireCoroutine(), $request)->rethrow();
+        };
+
+        $this->watchId = Event::watchRead($this->server, function () use ($dispatcher) {
             $client = @stream_socket_accept($this->server, 0, $remoteAddr);
             if (!$client) {
                 return;
@@ -123,7 +127,7 @@ class Server
             $stream = new Stream($client);
             $connection = new Connection(
                 $stream,
-                $this,
+                $dispatcher,
                 [
                     'REMOTE_ADDR' => $remoteInfo['host'] ?? '',
                     'REMOTE_PORT' => (int)($remoteInfo['port'] ?? 0),

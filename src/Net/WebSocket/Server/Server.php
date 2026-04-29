@@ -84,7 +84,7 @@ class Server
             return;
         }
 
-        $connection = new Connection($request->conn->stream, $request);
+        $connection = new Connection($request->stream(), $request);
 
         if (isset($this->onRequest)) {
             try {

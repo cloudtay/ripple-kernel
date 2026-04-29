@@ -1,14 +1,13 @@
 .idea
+.worktrees
 ripple-kernel.iml
 /temp/
 /docs/
 /debug/
 /logs/
 /vendor/
-*.md
 
 composer.lock
 
 .php-cs-fixer.cache
 .phpunit*
-!README.md

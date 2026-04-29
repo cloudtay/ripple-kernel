@@ -16,14 +16,23 @@ use function filesize;
 use function fopen;
 use function json_decode;
 use function md5_file;
+use function parse_url;
 use function posix_kill;
 use function random_bytes;
+use function fclose;
+use function fwrite;
 use function sys_get_temp_dir;
 use function tempnam;
 use function unlink;
 use function usleep;
 use function mt_rand;
 use function strval;
+use function strlen;
+use function strpos;
+use function stream_get_contents;
+use function stream_socket_client;
+use function strtolower;
+use function substr;
 
 use const SIGKILL;
 
@@ -102,6 +111,14 @@ class HttpFileTransferTest extends BaseTestCase
                     );
 
                     unlink($filePath);
+                    break;
+
+                case '/json':
+                    $request->respondJson([
+                        'post'       => $request->POST,
+                        'content'    => $request->CONTENT,
+                        'connection' => $request->SERVER['HTTP_CONNECTION'] ?? '',
+                    ]);
                     break;
 
                 default:
@@ -290,5 +307,51 @@ class HttpFileTransferTest extends BaseTestCase
         } finally {
             unlink($tmpFile);
         }
+    }
+
+    /**
+     * @testdox JSON 请求体应被解析且 Connection close 应返回 close
+     * @test
+     * @throws GuzzleException
+     */
+    public function testJsonPostAndConnectionClose(): void
+    {
+        $this->startTestServer();
+
+        $url = parse_url($this->testUrl);
+        $body = '{"hello":"world"}';
+        $socket = stream_socket_client(
+            'tcp://' . $url['host'] . ':' . $url['port'],
+            $errno,
+            $errstr,
+            3
+        );
+
+        $this->assertIsResource($socket, $errstr);
+
+        fwrite(
+            $socket,
+            "POST /json HTTP/1.1\r\n" .
+            "Host: {$url['host']}\r\n" .
+            "Content-Type: application/json\r\n" .
+            "Content-Length: " . strlen($body) . "\r\n" .
+            "Connection: close\r\n" .
+            "\r\n" .
+            $body
+        );
+
+        $response = stream_get_contents($socket);
+        fclose($socket);
+
+        $this->assertStringContainsString("HTTP/1.1 200 OK\r\n", $response);
+        $this->assertStringContainsString("Connection: close\r\n", $response);
+
+        $bodyOffset = strpos($response, "\r\n\r\n");
+        $this->assertNotFalse($bodyOffset);
+
+        $payload = json_decode(substr($response, $bodyOffset + 4), true);
+        $this->assertIsArray($payload);
+        $this->assertSame(['hello' => 'world'], $payload['post']);
+        $this->assertSame('close', strtolower($payload['connection']));
     }
 }

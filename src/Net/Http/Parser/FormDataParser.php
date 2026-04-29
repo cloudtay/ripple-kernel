@@ -10,7 +10,7 @@
  * Contributions, suggestions, and feedback are always welcome!
  */
 
-namespace Ripple\Net\Http\Server\Upload;
+namespace Ripple\Net\Http\Parser;
 
 use Ripple\Net\Exception\FormatException;
 use Ripple\Runtime\Exception\RuntimeException;
@@ -28,7 +28,7 @@ use function fwrite;
 /**
  * Http upload parser
  */
-class FormData
+class FormDataParser
 {
     private const STATUS_WAITING_META = 0;
 
@@ -37,7 +37,7 @@ class FormData
     /**
      * @var int
      */
-    private int $status = FormData::STATUS_WAITING_META;
+    private int $status = FormDataParser::STATUS_WAITING_META;
 
     /**
      * @var array|null
@@ -69,7 +69,7 @@ class FormData
         $files       = array();
 
         do {
-            if ($this->status === FormData::STATUS_WAITING_META) {
+            if ($this->status === FormDataParser::STATUS_WAITING_META) {
                 if ($meta = $this->parseMeta()) {
                     if ($meta['isFile']) {
                         $meta['path'] = sprintf('%s/%s/%s', sys_get_temp_dir(), '/', uniqid());
@@ -79,11 +79,11 @@ class FormData
                     }
 
                     $this->filling = $meta;
-                    $this->status = FormData::STATUS_TRAN;
+                    $this->status = FormDataParser::STATUS_TRAN;
                 }
             }
 
-            if ($this->status === FormData::STATUS_TRAN) {
+            if ($this->status === FormDataParser::STATUS_TRAN) {
                 $meta = $this->filling;
 
                 $buffer = $this->readBuffer();
@@ -107,7 +107,7 @@ class FormData
 
                     $files[$meta['name']][] = $meta;
                     $this->filling = null;
-                    $this->status = FormData::STATUS_WAITING_META;
+                    $this->status = FormDataParser::STATUS_WAITING_META;
                     continue;
                 }
             }
