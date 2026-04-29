@@ -3,6 +3,7 @@
 namespace Ripple\Tests\Net\Http;
 
 use PHPUnit\Framework\TestCase;
+use Ripple\Net\Http\Request;
 use Ripple\Net\Http\Parser\FormDataParser;
 use Ripple\Net\Http\Parser\RequestParser;
 
@@ -33,15 +34,16 @@ final class RequestParserTest extends TestCase
         );
 
         self::assertCount(1, $requests);
-        self::assertSame(['name' => 'ripple'], $requests[0]['get']);
-        self::assertSame([], $requests[0]['post']);
-        self::assertSame(['sid' => 'abc', 'theme' => 'dark'], $requests[0]['cookies']);
-        self::assertSame('127.0.0.1', $requests[0]['server']['REMOTE_ADDR']);
-        self::assertSame(12345, $requests[0]['server']['REMOTE_PORT']);
-        self::assertSame('/hello', $requests[0]['server']['REQUEST_URI']);
-        self::assertSame('GET', $requests[0]['server']['REQUEST_METHOD']);
-        self::assertSame('example.test', $requests[0]['server']['HTTP_HOST']);
-        self::assertSame('close', $requests[0]['server']['HTTP_CONNECTION']);
+        self::assertInstanceOf(Request::class, $requests[0]);
+        self::assertSame(['name' => 'ripple'], $requests[0]->getQueryParams());
+        self::assertSame([], $requests[0]->getParsedBody());
+        self::assertSame(['sid' => 'abc', 'theme' => 'dark'], $requests[0]->getCookieParams());
+        self::assertSame('127.0.0.1', $requests[0]->getServerParams()['REMOTE_ADDR']);
+        self::assertSame(12345, $requests[0]->getServerParams()['REMOTE_PORT']);
+        self::assertSame('/hello', $requests[0]->getServerParams()['REQUEST_URI']);
+        self::assertSame('GET', $requests[0]->getMethod());
+        self::assertSame('example.test', $requests[0]->getHeaderLine('Host'));
+        self::assertSame('close', $requests[0]->getHeaderLine('Connection'));
     }
 
     public function testParsesJsonPostBody(): void
@@ -59,8 +61,8 @@ final class RequestParserTest extends TestCase
         );
 
         self::assertCount(1, $requests);
-        self::assertSame(['ok' => true, 'name' => 'ripple'], $requests[0]['post']);
-        self::assertSame($body, $requests[0]['content']);
+        self::assertSame(['ok' => true, 'name' => 'ripple'], $requests[0]->getParsedBody());
+        self::assertSame($body, (string)$requests[0]->getBody());
     }
 
     public function testEmptyJsonPostBodyDoesNotThrow(): void
@@ -76,8 +78,8 @@ final class RequestParserTest extends TestCase
         );
 
         self::assertCount(1, $requests);
-        self::assertSame([], $requests[0]['post']);
-        self::assertSame('', $requests[0]['content']);
+        self::assertSame([], $requests[0]->getParsedBody());
+        self::assertSame('', (string)$requests[0]->getBody());
     }
 
     public function testParsesUrlEncodedPostBody(): void
@@ -95,8 +97,8 @@ final class RequestParserTest extends TestCase
         );
 
         self::assertCount(1, $requests);
-        self::assertSame(['a' => '1', 'b' => 'two'], $requests[0]['post']);
-        self::assertSame($body, $requests[0]['content']);
+        self::assertSame(['a' => '1', 'b' => 'two'], $requests[0]->getParsedBody());
+        self::assertSame($body, (string)$requests[0]->getBody());
     }
 
     public function testParsesPipelinedRequests(): void
@@ -109,7 +111,7 @@ final class RequestParserTest extends TestCase
         );
 
         self::assertCount(2, $requests);
-        self::assertSame('/one', $requests[0]['server']['REQUEST_URI']);
-        self::assertSame('/two', $requests[1]['server']['REQUEST_URI']);
+        self::assertSame('/one', $requests[0]->getServerParams()['REQUEST_URI']);
+        self::assertSame('/two', $requests[1]->getServerParams()['REQUEST_URI']);
     }
 }

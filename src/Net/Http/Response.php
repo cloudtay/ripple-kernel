@@ -1,193 +1,296 @@
 <?php declare(strict_types=1);
-/**
- * Copyright © 2024 cclilshy
- * Email: jingnigg@gmail.com
- *
- * This software is licensed under the MIT License.
- * For full license details, please visit: https://opensource.org/licenses/MIT
- *
- * By using this software, you agree to the terms of the license.
- * Contributions, suggestions, and feedback are always welcome!
- */
 
 namespace Ripple\Net\Http;
 
-use Closure;
 use Generator;
-use Ripple\Runtime\Scheduler;
-use Ripple\Stream\Exception\ConnectionException;
+use InvalidArgumentException;
+use Psr\Http\Message\MessageInterface;
+use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
+use Ripple\Net\Http\Enum\Status;
 use Ripple\Stream;
-use Throwable;
 
 use function filesize;
+use function gmdate;
 use function implode;
-use function is_array;
+use function is_file;
+use function is_numeric;
 use function is_resource;
 use function is_string;
-use function strlen;
-use function strval;
-use function is_file;
-use function strtolower;
-use function is_callable;
-use function gmdate;
-use function is_numeric;
+use function iterator_to_array;
+use function json_encode;
 use function rawurlencode;
 use function str_replace;
+use function strlen;
+use function strtolower;
+use function strval;
 use function trim;
 use function ucfirst;
 
-/**
- * response entity
- */
-class Response
+final class Response implements ResponseInterface
 {
-    /*** @var mixed|Stream|Generator|string */
-    protected mixed $body;
-
-    /*** @var array */
-    protected array $headers = [];
-
-    /*** @var array */
-    protected array $cookieLines = [];
-
-    /*** @var int */
-    protected int $statusCode = 200;
-
-    /*** @var string */
-    protected string $statusText = 'OK';
-
-    /*** @var bool 响应体发送完成后是否关闭连接 */
-    protected bool $closeAfterBody = false;
+    /**
+     * @var int
+     */
+    private int $statusCode = 200;
 
     /**
-     * @var Stream|null
+     * @var string
      */
-    protected ?Stream $stream = null;
+    private string $reasonPhrase = 'OK';
 
     /**
+     * @var array
      */
-    public function __construct()
-    {
+    private array $cookieLines = [];
+
+    /**
+     * @var bool
+     */
+    private bool $closeAfterBody = false;
+
+    /**
+     * @var string
+     */
+    private string $protocolVersion = '1.1';
+
+    /**
+     * @var HeaderMap
+     */
+    private HeaderMap $headers;
+
+    /**
+     * @var StreamInterface
+     */
+    private StreamInterface $body;
+
+    /**
+     * @param int $statusCode
+     * @param array $headers
+     * @param StreamInterface|string|null $body
+     * @param string $reasonPhrase
+     */
+    public function __construct(
+        int $statusCode = 200,
+        array $headers = [],
+        StreamInterface|string|null $body = null,
+        string $reasonPhrase = ''
+    ) {
+        $this->headers = new HeaderMap($headers);
+        $this->body = $body instanceof StreamInterface ? $body : BodyStream::fromString((string)($body ?? ''));
+        $this->statusCode = $statusCode;
+        $this->reasonPhrase = $reasonPhrase !== '' ? $reasonPhrase : (Status::messageForCode($statusCode) ?? '');
     }
 
     /**
-     * @return void
-     * @throws ConnectionException
+     * @return string
      */
-    public function __invoke(): void
+    public function getProtocolVersion(): string
     {
-        $this->send();
+        return $this->protocolVersion;
     }
 
     /**
-     * @return void
-     * @throws ConnectionException
+     * @param string $version
+     * @return MessageInterface
      */
-    public function send(): void
+    public function withProtocolVersion(string $version): MessageInterface
     {
-        // respond header
-        $header = "HTTP/1.1 {$this->statusCode()} {$this->statusText}\r\n";
+        $clone = clone $this;
+        $clone->protocolVersion = $version;
+        return $clone;
+    }
 
-        foreach ($this->headers as $name => $values) {
-            if (is_string($values)) {
-                $header .= "$name: $values\r\n";
-            } elseif (is_array($values)) {
-                $header .= "$name: " . implode(', ', $values) . "\r\n";
-            }
+    /**
+     * 获取全部消息头
+     * @return array
+     */
+    public function getHeaders(): array
+    {
+        return $this->headers->all();
+    }
+
+    /**
+     * 判断消息头是否存在
+     * @param string $name 消息头名称
+     * @return bool
+     */
+    public function hasHeader(string $name): bool
+    {
+        return $this->headers->has($name);
+    }
+
+    /**
+     * 获取消息头值列表
+     * @param string $name 消息头名称
+     * @return string[]
+     */
+    public function getHeader(string $name): array
+    {
+        return $this->headers->get($name);
+    }
+
+    /**
+     * 获取消息头行
+     * @param string $name 消息头名称
+     * @return string
+     */
+    public function getHeaderLine(string $name): string
+    {
+        return $this->headers->line($name);
+    }
+
+    /**
+     * 返回替换消息头后的消息实例
+     * @param string $name 消息头名称
+     * @param string|string[] $value 消息头值
+     * @return MessageInterface
+     */
+    public function withHeader(string $name, $value): MessageInterface
+    {
+        $clone = clone $this;
+        $clone->headers->set($name, $value);
+        return $clone;
+    }
+
+    /**
+     * 返回追加消息头后的消息实例
+     * @param string $name 消息头名称
+     * @param string|string[] $value 消息头值
+     * @return MessageInterface
+     */
+    public function withAddedHeader(string $name, $value): MessageInterface
+    {
+        $clone = clone $this;
+        $clone->headers->add($name, $value);
+        return $clone;
+    }
+
+    /**
+     * @param string $name
+     * @return MessageInterface
+     */
+    public function withoutHeader(string $name): MessageInterface
+    {
+        $clone = clone $this;
+        $clone->headers->remove($name);
+        return $clone;
+    }
+
+    /**
+     * @return StreamInterface
+     */
+    public function getBody(): StreamInterface
+    {
+        return $this->body;
+    }
+
+    /**
+     * @param string $content
+     * @param int $status
+     * @param array $headers
+     * @return self
+     */
+    public static function text(string $content, int $status = 200, array $headers = []): self
+    {
+        $response = new self($status, ['Content-Type' => 'text/plain'] + $headers, $content);
+        return self::withContentLength($response, $content);
+    }
+
+    /**
+     * @param string $content
+     * @param int $status
+     * @param array $headers
+     * @return self
+     */
+    public static function html(string $content, int $status = 200, array $headers = []): self
+    {
+        $response = new self($status, ['Content-Type' => 'text/html'] + $headers, $content);
+        return self::withContentLength($response, $content);
+    }
+
+    /**
+     * @param mixed $content
+     * @param int $status
+     * @param array $headers
+     * @return self
+     */
+    public static function json(mixed $content, int $status = 200, array $headers = []): self
+    {
+        $encoded = is_string($content) ? $content : json_encode($content);
+        $encoded = (string)$encoded;
+        $response = new self($status, ['Content-Type' => 'application/json'] + $headers, $encoded);
+        return self::withContentLength($response, $encoded);
+    }
+
+    /**
+     * @return int
+     */
+    public function getStatusCode(): int
+    {
+        return $this->statusCode;
+    }
+
+    /**
+     * @param int $code
+     * @param string $reasonPhrase
+     * @return ResponseInterface
+     */
+    public function withStatus(int $code, string $reasonPhrase = ''): ResponseInterface
+    {
+        if ($code < 100 || $code > 599) {
+            throw new InvalidArgumentException('Invalid HTTP status code.');
         }
 
-        foreach ($this->cookieLines as $cookieLine) {
-            $header .= 'Set-Cookie: ' . $cookieLine . "\r\n";
-        }
+        $clone = clone $this;
+        $clone->statusCode = $code;
+        $clone->reasonPhrase = $reasonPhrase !== '' ? $reasonPhrase : (Status::messageForCode($code) ?? '');
+        return $clone;
+    }
 
-        // respond body
-        if (is_callable($this->body)) {
-            $this->body = ($this->body)($this->stream);
-        }
+    /**
+     * @return string
+     */
+    public function getReasonPhrase(): string
+    {
+        return $this->reasonPhrase;
+    }
 
-        if (is_string($this->body)) {
-            $this->stream->writeAll("{$header}\r\n{$this->body}");
-        } else {
-            $this->stream->writeAll("{$header}\r\n");
+    /**
+     * @return int
+     */
+    public function statusCode(): int
+    {
+        return $this->getStatusCode();
+    }
 
-            // 普通文本
-            if (is_string($this->body)) {
-                $this->stream->writeAll($this->body);
-            }
+    /**
+     * @return string
+     */
+    public function statusText(): string
+    {
+        return $this->getReasonPhrase();
+    }
 
-            // 可控流式传输方式
-            elseif ($this->body instanceof Generator) {
-                foreach ($this->body as $content) {
-                    if (!is_string($content) || $content === '') {
-                        continue;
-                    }
+    /**
+     * @param int $statusCode
+     * @return $this
+     */
+    public function setStatusCode(int $statusCode): Response
+    {
+        $this->statusCode = $statusCode;
+        $this->reasonPhrase = Status::messageForCode($statusCode) ?? $this->reasonPhrase;
+        return $this;
+    }
 
-                    try {
-                        $this->stream->writeAll($content);
-                    } catch (Throwable) {
-                        break;
-                    }
-                }
-            }
-
-            // 固定流传输方式
-            elseif ($this->body instanceof Stream) {
-                try {
-                    $owner = \Co\current();
-                    $this->stream->setWriteBufferMax(10485760);
-                    $this->stream->watchWrite(function () use ($owner) {
-                        try {
-                            $bufferLen = $this->stream->writeBuffer()->length();
-
-                            // 阈值检查
-                            if ($bufferLen > 10405760) {
-                                $this->stream->flushOnce();
-                                return;
-                            }
-
-                            // 优先处理body数据
-                            if (!$this->body->isClosed()) {
-                                $buf = $this->body->read(8192);
-                                if ($buf) {
-                                    $this->stream->writeAsync($buf);
-                                }
-
-                                if ($this->body->eof()) {
-                                    $this->body->close();
-                                }
-                            }
-
-                            $this->stream->flushOnce();
-
-                            // 文件末尾 && 缓冲区空
-                            if ($this->body->eof() && $this->stream->writeBuffer()->length() === 0) {
-                                Scheduler::tryResume($owner);
-                            }
-                        } catch (Throwable) {
-                            Scheduler::tryResume($owner);
-                        }
-                    });
-
-                    $owner->suspend();
-                } catch (ConnectionException $exception) {
-                    throw $exception;
-                } catch (Throwable $exception) {
-                    throw new ConnectionException($exception->getMessage(), $exception->getCode(), $exception);
-                } finally {
-                    $this->body->close();
-                    $this->stream->unwatchWrite();
-                }
-            } else {
-                throw new ConnectionException('The response content is illegal.');
-            }
-        }
-
-        $connectionHeader = $this->headers['Connection'] ?? '';
-        $connectionValue = strtolower($connectionHeader);
-
-        if ($connectionValue === 'close' || $this->closeAfterBody) {
-            $this->stream->close();
-        }
+    /**
+     * @param string $statusText
+     * @return $this
+     */
+    public function setStatusText(string $statusText): Response
+    {
+        $this->reasonPhrase = $statusText;
+        return $this;
     }
 
     /**
@@ -196,26 +299,12 @@ class Response
      */
     public function header(null|string $name = null): mixed
     {
-        if (!$name) {
-            return $this->headers;
+        if ($name === null) {
+            return $this->getHeaders();
         }
-        return $this->headers[$name] ?? null;
-    }
 
-    /**
-     * @return int
-     */
-    public function statusCode(): int
-    {
-        return $this->statusCode;
-    }
-
-    /**
-     * @return string
-     */
-    public function statusText(): string
-    {
-        return $this->statusText;
+        $values = $this->getHeader($name);
+        return $values[1] ?? $values[0] ?? null;
     }
 
     /**
@@ -228,182 +317,167 @@ class Response
     }
 
     /**
-     * @param string $statusText
-     * @return static
-     */
-    public function setStatusText(string $statusText): static
-    {
-        $this->statusText = $statusText;
-        return $this;
-    }
-
-    /**
-     * @param int $statusCode
-     * @return static
-     */
-    public function setStatusCode(int $statusCode): static
-    {
-        $this->statusCode = $statusCode;
-        return $this;
-    }
-
-    /**
-     * @param string $name
-     * @param mixed $value
-     * @return static
-     */
-    public function withHeader(string $name, mixed $value): static
-    {
-        $this->headers[$name] = $value;
-        return $this;
-    }
-
-    /**
      * @param string $name
      * @param string $content
      * @param array|null $options
-     * @return static
+     * @return $this
      */
-    public function withCookie(string $name, string $content, ?array $options = []): static
+    public function withCookie(string $name, string $content, ?array $options = []): Response
     {
         $options = $options ?? [];
-
         $name = trim($name);
         if ($name === '') {
             return $this;
         }
 
         $value = str_replace([';', "\r", "\n", "\0"], '', rawurlencode($content));
-
-        // 开始收集所有部分
         $parts = ["{$name}={$value}"];
 
-        // expires
         if (isset($options['expires']) && is_numeric($options['expires'])) {
-            $exp = (int) $options['expires'];
-            if ($exp > 0) {
-                $expiresStr = gmdate('D, d M Y H:i:s \G\M\T', $exp);
-                $parts[] = "Expires={$expiresStr}";
+            $expires = (int)$options['expires'];
+            if ($expires > 0) {
+                $parts[] = 'Expires=' . gmdate('D, d M Y H:i:s \G\M\T', $expires);
             }
         }
 
-        // maxAge
         if (isset($options['maxAge']) && is_numeric($options['maxAge'])) {
-            $maxAge = (int) $options['maxAge'];
+            $maxAge = (int)$options['maxAge'];
             $parts[] = "Max-Age={$maxAge}";
             if ($maxAge <= 0) {
                 $parts[] = 'Expires=Thu, 01 Jan 1970 00:00:00 GMT';
             }
         }
 
-        // path - 默认 /
-        $path = !empty($options['path']) ? trim($options['path']) : '/';
-        $path = str_replace([';', "\r", "\n"], '', $path);
-        $parts[] = "Path={$path}";
+        $path = !empty($options['path']) ? trim((string)$options['path']) : '/';
+        $parts[] = 'Path=' . str_replace([';', "\r", "\n"], '', $path);
 
-        // domain
         if (!empty($options['domain'])) {
-            $domain = trim($options['domain'], '. ');
+            $domain = trim((string)$options['domain'], '. ');
             if ($domain !== '') {
-                $domain = str_replace([';', "\r", "\n"], '', $domain);
-                $parts[] = "Domain={$domain}";
+                $parts[] = 'Domain=' . str_replace([';', "\r", "\n"], '', $domain);
             }
         }
 
-        // secure
         if (!empty($options['secure'])) {
             $parts[] = 'Secure';
         }
 
-        // httponly
         if (!empty($options['httponly']) || !empty($options['httpOnly'])) {
             $parts[] = 'HttpOnly';
         }
 
-        // samesite
         if (!empty($options['samesite'])) {
-            $s = strtolower(trim($options['samesite']));
-            if ($s === 'strict' || $s === 'lax' || $s === 'none') {
-                $s = ucfirst($s);
-                $parts[] = "SameSite={$s}";
+            $sameSite = strtolower(trim((string)$options['samesite']));
+            if ($sameSite === 'strict' || $sameSite === 'lax' || $sameSite === 'none') {
+                $parts[] = 'SameSite=' . ucfirst($sameSite);
             }
         }
 
-        $this->cookieLines[] = implode('; ', $parts);
+        $this->cookieLines[$name] = implode('; ', $parts);
         return $this;
     }
 
     /**
      * @param string $cookieLine
-     * @return static
+     * @return $this
      */
-    public function withCookieLine(string $cookieLine): static
+    public function withCookieLine(string $cookieLine): Response
     {
         $this->cookieLines[] = $cookieLine;
         return $this;
     }
 
     /**
-     * @param mixed $content
-     * @return static
-     */
-    public function withBody(mixed $content): static
-    {
-        if (is_string($content)) {
-            $this->withHeader('Content-Length', strval(strlen($content)));
-        } elseif ($content instanceof Stream) {
-            $path = $content->getMetadata('uri');
-            if (is_string($path) && $path !== '' && is_file($path)) {
-                $length = filesize($path);
-                $this->withHeader('Content-Length', strval($length));
-            }
-            // 不再默认设置 Content-Type/Content-Disposition, 让调用方自行决定是否下载
-        } elseif (is_resource($content)) {
-            return $this->withBody(new Stream($content));
-        } elseif ($content instanceof Closure) {
-            return $this->withBody($content());
-        }
-
-        $this->body = $content;
-        return $this;
-    }
-
-    /**
-     * @param Stream $stream
-     * @return static
-     */
-    public function withStream(Stream $stream): static
-    {
-        $this->stream = $stream;
-        return $this;
-    }
-
-    /**
      * @param string $name
-     * @return static
+     * @return Response
      */
-    public function removeHeader(string $name): static
+    public function removeHeader(string $name): Response
     {
-        unset($this->headers[$name]);
-        return $this;
+        return $this->withoutHeader($name);
     }
 
     /**
-     * 响应体发送完成后关闭连接
-     * @return static
+     * @return $this
      */
-    public function closeAfter(): static
+    public function closeAfter(): Response
     {
         $this->closeAfterBody = true;
         return $this;
     }
 
     /**
-     * 获取响应体内容
+     * @return bool
+     */
+    public function shouldCloseAfterBody(): bool
+    {
+        return $this->closeAfterBody;
+    }
+
+    /**
      * @return mixed
      */
     public function body(): mixed
     {
-        return $this->body;
+        return (string)$this->body;
+    }
+
+    /**
+     * @param mixed $body
+     * @return Response|$this
+     */
+    public function withBody(mixed $body): Response
+    {
+        if ($body instanceof StreamInterface) {
+            return $this->withPsrBody($body);
+        }
+
+        if ($body instanceof Stream) {
+            $path = $body->getMetadata('uri');
+            $response = $this->withPsrBody(BodyStream::fromString(''));
+            if (is_string($path) && $path !== '' && is_file($path)) {
+                $response = $response->withHeader('Content-Length', strval(filesize($path)));
+            }
+            return $response;
+        }
+
+        if (is_resource($body)) {
+            return $this->withPsrBody(new BodyStream($body));
+        }
+
+        if ($body instanceof Generator) {
+            $body = implode('', iterator_to_array($body));
+        }
+
+        $content = (string)$body;
+        return self::withContentLength($this->withPsrBody(BodyStream::fromString($content)), $content);
+    }
+
+    /**
+     * @param StreamInterface $body
+     * @return $this
+     */
+    private function withPsrBody(StreamInterface $body): Response
+    {
+        $clone = clone $this;
+        $clone->body = $body;
+        return $clone;
+    }
+
+    /**
+     * @param Response $response
+     * @param string $content
+     * @return self
+     */
+    private static function withContentLength(self $response, string $content): self
+    {
+        return $response->withHeader('Content-Length', (string)strlen($content));
+    }
+
+    /**
+     * @return void
+     */
+    public function __clone()
+    {
+        $this->headers = new HeaderMap($this->headers->all());
     }
 }

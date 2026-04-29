@@ -113,7 +113,7 @@ class FormDataParser
             }
 
             break;
-        } while (1);
+        } while (true);
 
         return $files;
     }

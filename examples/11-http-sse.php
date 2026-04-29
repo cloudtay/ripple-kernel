@@ -4,6 +4,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Ripple\Net\Http;
 use Ripple\Net\Http\Request;
+use Ripple\Net\Http\Response;
 use Ripple\Runtime;
 use Ripple\Stream\Exception\ConnectionException;
 
@@ -22,16 +23,14 @@ function main(): int
         if ($uri === '/') {
             $htmlPath = __DIR__ . '/11-http-sse.html';
             if (!\is_file($htmlPath)) {
-                $request->respond('HTML template not found', ['Content-Type' => 'text/plain'], 404);
-                return;
+                return Response::text('HTML template not found', 404);
             }
 
             $html = \file_get_contents($htmlPath);
-            $request->respond($html, ['Content-Type' => 'text/html; charset=utf-8']);
-            return;
+            return Response::html($html, 200, ['Content-Type' => 'text/html; charset=utf-8']);
         }
 
-        $request->respond('Not Found', ['Content-Type' => 'text/plain'], 404);
+        return Response::text('Not Found', 404);
     };
 
     echo "SSE server started: http://127.0.0.1:8000\n";
@@ -47,32 +46,33 @@ function main(): int
  */
 function respondSSE(Request $request): void
 {
-    $request->response()
-        ->withHeader('Content-Type', 'text/event-stream')
-        ->withHeader('Cache-Control', 'no-cache')
-        ->withHeader('Connection', 'keep-alive')
-        ->withHeader('X-Accel-Buffering', 'no')
-        ->withBody(function () {
-            $eventId = 0;
+    // SSE keeps the connection open and writes to the stream directly.
+    $stream = $request->stream();
+    $stream->writeAll(
+        "HTTP/1.1 200 OK\r\n" .
+        "Content-Type: text/event-stream\r\n" .
+        "Cache-Control: no-cache\r\n" .
+        "Connection: close\r\n" .
+        "X-Accel-Buffering: no\r\n" .
+        "\r\n"
+    );
 
-            for ($i = 1; $i <= 10; $i++) {
-                $eventId++;
-                $time = \date('H:i:s');
-                $data = \json_encode([
-                    'id' => $eventId,
-                    'time' => $time,
-                    'message' => "Event #$i"
-                ]);
+    for ($i = 1; $i <= 10; $i++) {
+        $time = \date('H:i:s');
+        $data = \json_encode([
+            'id' => $i,
+            'time' => $time,
+            'message' => "Event #$i"
+        ]);
 
-                yield "id: $eventId\n";
-                yield "data: $data\n";
-                yield "\n";
+        $stream->writeAll("id: $i\n");
+        $stream->writeAll("data: $data\n");
+        $stream->writeAll("\n");
 
-                Co\sleep(1);
-            }
-        })
-        ->closeAfter()
-        ->send();
+        Co\sleep(1);
+    }
+
+    $stream->close();
 }
 
 Runtime::run(static fn () => \main());

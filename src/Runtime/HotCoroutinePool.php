@@ -53,7 +53,7 @@ final class HotCoroutinePool
     {
         if ($this->coroutines->isEmpty()) {
             return $coroutine = go(function () use (&$coroutine) {
-                while (1) {
+                while (true) {
                     call_user_func($this->process);
                     $this->release($coroutine);
                 }

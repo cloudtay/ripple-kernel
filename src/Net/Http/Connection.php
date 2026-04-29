@@ -14,9 +14,11 @@ namespace Ripple\Net\Http;
 
 use Closure;
 use Ripple\Net\Http\Parser\RequestParser;
+use Ripple\Net\Http\Protocol\ResponseEmitter;
 use Ripple\Runtime\Support\Stdin;
 use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
+use Psr\Http\Message\ResponseInterface;
 use Throwable;
 
 use function str_contains;
@@ -30,7 +32,7 @@ class Connection
     private RequestParser $parser;
 
     /**
-     * @var Closure(Request):void
+     * @var Closure(Request):ResponseInterface
      */
     private readonly Closure $dispatcher;
 
@@ -46,11 +48,12 @@ class Connection
      * @param array $meta 服务器信息
      */
     public function __construct(
-        public readonly Stream $stream,
-        callable               $dispatcher,
-        private array          $meta = []
+        public readonly Stream           $stream,
+        callable                         $dispatcher,
+        private readonly array           $meta = [],
+        private readonly ResponseEmitter $emitter = new ResponseEmitter(),
     ) {
-        $this->dispatcher = Closure::fromCallable($dispatcher);
+        $this->dispatcher = $dispatcher(...);
         $this->alwaysMeta = $this->meta;
         $this->parser = new RequestParser($this->alwaysMeta);
     }
@@ -94,16 +97,8 @@ class Connection
     {
         $reqs = [];
 
-        foreach ($this->parser->push($content) as $reqInfo) {
-            $reqs[] = new Request(
-                $reqInfo['get'],
-                $reqInfo['post'],
-                $reqInfo['cookies'],
-                $reqInfo['files'],
-                $reqInfo['server'],
-                $reqInfo['content'],
-                stream: $this->stream,
-            );
+        foreach ($this->parser->push($content) as $request) {
+            $reqs[] = $request->withStream($this->stream);
         }
 
         return $reqs;
@@ -112,13 +107,26 @@ class Connection
     /**
      * 处理 HTTP 请求
      * @param Request $req 请求信息
-     * @return void
+     * @return ResponseInterface|null
      * @throws ConnectionException
      */
-    private function onRequest(Request $req): void
+    private function onRequest(Request $req): ?ResponseInterface
     {
-        $response = $req->response();
-        $response->withHeader('Server', 'ripple');
+        $responder = new ServerResponder();
+        $req->bindResponder($responder);
+
+        try {
+            $response = ($this->dispatcher)($req);
+        } catch (ConnectionException $exception) {
+            throw $exception;
+        } catch (Throwable $exception) {
+            $response = Response::text($exception->getMessage(), 500);
+        }
+
+        $response = $response instanceof ResponseInterface ? $response : $responder->response();
+        if (!$response instanceof ResponseInterface) {
+            return null;
+        }
 
         // 半关闭检测
         $connHeader = $req->SERVER['HTTP_CONNECTION'] ?? '';
@@ -127,17 +135,31 @@ class Connection
         $isWebSocketUpgrade = strtolower($upgradeHeader) === 'websocket' && str_contains(strtolower($connHeader), 'upgrade');
 
         if ($keepAlive || $isWebSocketUpgrade) {
-            $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
+            $response = $response->withHeader('Connection', $keepAlive ? 'keep-alive' : 'Upgrade');
         } else {
-            $response->withHeader('Connection', 'close');
+            $response = $response->withHeader('Connection', 'close');
         }
 
-        try {
-            ($this->dispatcher)($req);
-        } catch (ConnectionException $exception) {
-            throw $exception;
-        } catch (Throwable $exception) {
-            $req->respond($exception->getMessage(), [], 500);
+        $response = $response->withHeader('Server', 'ripple');
+        $this->emitter->emit($response, $this->stream);
+        return $response;
+    }
+
+    /**
+     * @param string $content
+     * @return list<ResponseInterface>
+     * @throws ConnectionException
+     */
+    public function fillForTest(string $content): array
+    {
+        $responses = [];
+        foreach ($this->fill($content) as $request) {
+            $response = $this->onRequest($request);
+            if ($response instanceof ResponseInterface) {
+                $responses[] = $response;
+            }
         }
+
+        return $responses;
     }
 }

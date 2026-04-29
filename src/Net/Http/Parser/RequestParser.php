@@ -13,7 +13,10 @@
 namespace Ripple\Net\Http\Parser;
 
 use Ripple\Net\Exception\FormatException;
+use Ripple\Net\Http\BodyStream;
 use Ripple\Net\Http\Enum\Method;
+use Ripple\Net\Http\Request;
+use Ripple\Net\Http\Uri;
 use RuntimeException;
 
 use function array_merge;
@@ -29,19 +32,23 @@ use function preg_match;
 use function rawurldecode;
 use function str_contains;
 use function str_ends_with;
+use function str_replace;
 use function str_starts_with;
 use function strlen;
 use function strpos;
-use function strtoupper;
 use function strtok;
+use function strtoupper;
+use function strtr;
 use function substr;
 use function trim;
-use function strtr;
 
 use const PHP_URL_PATH;
 
 final class RequestParser
 {
+    /**
+     *
+     */
     private const COMMON_HEADERS = [
         'HOST' => 'HTTP_HOST',
         'USER-AGENT' => 'HTTP_USER_AGENT',
@@ -53,46 +60,94 @@ final class RequestParser
         'CONTENT-LENGTH' => 'HTTP_CONTENT_LENGTH',
     ];
 
+    /**
+     *
+     */
     private const STEP_INITIAL = 0;
     private const STEP_CONTINUOUS = 1;
     private const STEP_COMPLETE = 2;
     private const STEP_FILE_TRANSFER = 3;
 
+    /**
+     * @var int
+     */
     private int $step;
 
+    /**
+     * @var array
+     */
     private array $get;
 
+    /**
+     * @var array
+     */
     private array $post;
 
+    /**
+     * @var array
+     */
     private array $attributes;
 
+    /**
+     * @var array
+     */
     private array $cookies;
 
+    /**
+     * @var array
+     */
     private array $files;
 
+    /**
+     * @var mixed
+     */
     private mixed $content;
 
+    /**
+     * @var string
+     */
     private string $buf = '';
 
+    /**
+     * @var FormDataParser|null
+     */
     private FormDataParser|null $multipart;
 
+    /**
+     * @var int
+     */
     private int $bodySize;
 
+    /**
+     * @var int
+     */
     private int $contentLength;
 
+    /**
+     * @var string
+     */
     private string $contentType;
 
+    /**
+     * @var Method
+     */
     private Method $method;
 
+    /**
+     * @var array
+     */
     private array $meta;
 
+    /**
+     * @param array $alwaysMeta
+     */
     public function __construct(private readonly array $alwaysMeta = [])
     {
         $this->reset();
     }
 
     /**
-     * @return array<int,array{get:array,post:array,attributes:array,cookies:array,files:array,server:array,content:mixed}>
+     * @return list<Request>
      * @throws FormatException
      * @throws RuntimeException
      */
@@ -101,6 +156,9 @@ final class RequestParser
         return $this->fill($content);
     }
 
+    /**
+     * @return void
+     */
     private function reset(): void
     {
         $this->step = self::STEP_INITIAL;
@@ -110,7 +168,7 @@ final class RequestParser
         $this->cookies = [];
         $this->files = [];
         $this->meta = $this->alwaysMeta;
-        $this->content = '';
+        $this->content = "";
         $this->multipart = null;
         $this->bodySize = 0;
         $this->contentLength = 0;
@@ -118,7 +176,7 @@ final class RequestParser
     }
 
     /**
-     * @return array<int,array{get:array,post:array,attributes:array,cookies:array,files:array,server:array,content:mixed}>
+     * @return list<Request>
      * @throws FormatException
      * @throws RuntimeException
      */
@@ -206,6 +264,10 @@ final class RequestParser
         }
     }
 
+    /**
+     * @param int $length
+     * @return string
+     */
     private function readBuffer(int $length = 0): string
     {
         if ($length === 0) {
@@ -219,6 +281,10 @@ final class RequestParser
         return $buffer;
     }
 
+    /**
+     * @param array $base
+     * @return void
+     */
     private function initParams(array $base): void
     {
         $urlExp = explode('?', $base[1]);
@@ -229,15 +295,23 @@ final class RequestParser
         }
 
         $this->meta['REQUEST_URI'] = $path;
+        $this->meta['REQUEST_TARGET'] = $base[1];
         $this->meta['REQUEST_METHOD'] = $base[0];
         $this->meta['SERVER_PROTOCOL'] = $base[2];
     }
 
+    /**
+     * @param string $queryStr
+     * @return void
+     */
     private function parseQuery(string $queryStr): void
     {
         parse_str($queryStr, $this->get);
     }
 
+    /**
+     * @return void
+     */
     private function parseHeaders(): void
     {
         while ($line = strtok("\r\n")) {
@@ -255,6 +329,9 @@ final class RequestParser
         }
     }
 
+    /**
+     * @return void
+     */
     private function receiveBody(): void
     {
         if ($buffer = $this->readBuffer(max(0, $this->contentLength - $this->bodySize))) {
@@ -265,6 +342,9 @@ final class RequestParser
         $this->checkContentLength();
     }
 
+    /**
+     * @return void
+     */
     private function checkContentLength(): void
     {
         if ($this->bodySize === $this->contentLength) {
@@ -309,26 +389,50 @@ final class RequestParser
         $this->checkContentLength();
     }
 
-    private function completeRequest(): array
+    /**
+     * @return Request
+     */
+    private function completeRequest(): Request
     {
         $this->parseCookies();
         $this->parseRequestBody();
         $this->parseXfp();
 
-        $result = [
-            'get' => $this->get,
-            'post' => $this->post,
-            'attributes' => $this->attributes,
-            'cookies' => $this->cookies,
-            'files' => $this->files,
-            'server' => $this->meta,
-            'content' => $this->content,
-        ];
+        $headers = [];
+        foreach ($this->meta as $key => $value) {
+            if (!str_starts_with($key, 'HTTP_')) {
+                continue;
+            }
+
+            $name = str_replace('_', '-', substr($key, 5));
+            $headers[$name] = $value;
+        }
+
+        $host = $this->meta['HTTP_HOST'] ?? 'localhost';
+        $scheme = ($this->meta['HTTPS'] ?? 'off') === 'on' ? 'https' : 'http';
+        $target = $this->meta['REQUEST_TARGET'] ?? ($this->meta['REQUEST_URI'] ?? '/');
+
+        $result = new Request(
+            method: $this->method->value,
+            uri: new Uri("{$scheme}://{$host}{$target}"),
+            headers: $headers,
+            body: BodyStream::fromString((string)$this->content),
+            serverParams: $this->meta,
+            queryParams: $this->get,
+            parsedBody: $this->post,
+            cookieParams: $this->cookies,
+            uploadedFiles: $this->files,
+            attributes: $this->attributes,
+            requestTarget: $target,
+        );
 
         $this->reset();
         return $result;
     }
 
+    /**
+     * @return void
+     */
     private function parseCookies(): void
     {
         $this->cookies = [];
@@ -353,6 +457,9 @@ final class RequestParser
         }
     }
 
+    /**
+     * @return void
+     */
     private function parseRequestBody(): void
     {
         if ($this->method->value === 'POST') {
@@ -364,6 +471,9 @@ final class RequestParser
         }
     }
 
+    /**
+     * @return void
+     */
     private function parseXfp(): void
     {
         if ($xfw = $this->meta['HTTP_X_FORWARDED_PROTO'] ?? null) {

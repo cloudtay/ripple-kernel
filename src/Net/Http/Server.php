@@ -14,10 +14,10 @@ namespace Ripple\Net\Http;
 
 use Closure;
 use InvalidArgumentException;
+use Psr\Http\Message\ResponseInterface;
 use Ripple\Coroutine;
 use Ripple\Event;
 use Ripple\Runtime\HotCoroutinePool;
-use Ripple\Runtime\Scheduler;
 use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
 use UnexpectedValueException;
@@ -109,11 +109,12 @@ class Server
         }
 
         $this->hotCoroutinePool = new HotCoroutinePool(function () {
-            call_user_func($this->onRequest, suspend());
+            return call_user_func($this->onRequest, suspend());
         }, 200);
 
-        $dispatcher = function (Request $request): void {
-            Scheduler::resume($this->acquireCoroutine(), $request)->rethrow();
+        $dispatcher = function (Request $request): ?ResponseInterface {
+            $response = call_user_func($this->onRequest, $request);
+            return $response instanceof ResponseInterface ? $response : null;
         };
 
         $this->watchId = Event::watchRead($this->server, function () use ($dispatcher) {

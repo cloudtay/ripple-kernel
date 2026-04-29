@@ -13,6 +13,9 @@
 namespace Ripple\Net\WebSocket\Server;
 
 use Closure;
+use Psr\Http\Message\ResponseInterface;
+use Ripple\Net\Http\Protocol\ResponseEmitter;
+use Ripple\Net\Http\Response;
 use Ripple\Net\Http\Server as HttpServer;
 use Ripple\Net\Http\Request;
 use Ripple\Stream\Exception\ConnectionException;
@@ -69,19 +72,17 @@ class Server
     /**
      * 处理 WebSocket 请求
      * @param Request $request
-     * @return void
+     * @return ResponseInterface|null
      * @throws ConnectionException
      */
-    private function handleWebSocketRequest(Request $request): void
+    private function handleWebSocketRequest(Request $request): ?ResponseInterface
     {
         if (!$this->isWebSocketUpgrade($request)) {
-            $request->respond('Not Found', [], 404);
-            return;
+            return Response::text('Not Found', 404);
         }
 
         if (!$this->performHandshake($request)) {
-            $request->respond('Bad Request', [], 400);
-            return;
+            return Response::text('Bad Request', 400);
         }
 
         $connection = new Connection($request->stream(), $request);
@@ -90,23 +91,20 @@ class Server
             try {
                 ($this->onRequest)($request, $connection);
             } catch (Throwable $e) {
-                $request->respond(
-                    sprintf("%s:%s", 'Bad Request', $e->getMessage()),
-                    [],
-                    400
-                );
-                return;
+                return Response::text(sprintf("%s:%s", 'Bad Request', $e->getMessage()), 400);
             }
         }
 
         if (!$connection->isAlive()) {
-            return;
+            return null;
         }
 
         if (isset($this->onConnect)) {
             $handler = $this->onConnect;
             go(static fn () => $handler($connection));
         }
+
+        return null;
     }
 
     /**
@@ -140,15 +138,13 @@ class Server
         $key = $headers['HTTP_SEC_WEBSOCKET_KEY'] ?? $headers['SEC_WEBSOCKET_KEY'] ?? '';
         $accept = base64_encode(sha1($key . '258EAFA5-E914-47DA-95CA-C5AB0DC85B11', true));
 
-        $response = $request->response();
-        $response->setStatusCode(101);
-        $response->withHeader('Upgrade', 'websocket');
-        $response->withHeader('Connection', 'Upgrade');
-        $response->withHeader('Sec-WebSocket-Accept', $accept);
-        $response->withBody('');
+        $response = (new Response(101))
+            ->withHeader('Upgrade', 'websocket')
+            ->withHeader('Connection', 'Upgrade')
+            ->withHeader('Sec-WebSocket-Accept', $accept);
 
         try {
-            $response();
+            (new ResponseEmitter())->emit($response, $request->stream());
             return true;
         } catch (Throwable) {
             return false;

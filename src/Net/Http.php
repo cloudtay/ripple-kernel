@@ -12,6 +12,7 @@
 
 namespace Ripple\Net;
 
+use Ripple\Net\Http\Client\Client;
 use Ripple\Net\Http\Server;
 use Ripple\Stream\Exception\ConnectionException;
 use Throwable;
@@ -32,5 +33,14 @@ class Http
         } catch (ConnectionException $e) {
             throw new RuntimeException($e->getMessage(), $e->getCode(), $e);
         }
+    }
+
+    /**
+     * @param array $config
+     * @return Client
+     */
+    public static function client(array $config = []): Client
+    {
+        return new Client($config);
     }
 }

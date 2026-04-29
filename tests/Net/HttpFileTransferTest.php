@@ -4,6 +4,7 @@ namespace Ripple\Tests\Net;
 
 use Ripple\Net\Http;
 use Ripple\Net\Http\Request;
+use Ripple\Net\Http\Response;
 use Ripple\Process;
 use Ripple\Tests\Runtime\BaseTestCase;
 use GuzzleHttp\Client;
@@ -84,15 +85,13 @@ class HttpFileTransferTest extends BaseTestCase
                     if (!empty($files['file'])) {
                         foreach ($files['file'] as $file) {
                             $md5 = md5_file($file['path']);
-                            $request->respondJson([
+                            return Response::json([
                                 'fileName' => $file['fileName'],
                                 'md5'      => $md5,
                             ]);
-                            return;
                         }
                     }
-                    $request->respondJson(['error' => 'No file uploaded'], [], 400);
-                    break;
+                    return Response::json(['error' => 'No file uploaded'], 400);
 
                 case '/download':
 
@@ -100,29 +99,25 @@ class HttpFileTransferTest extends BaseTestCase
                     file_put_contents($filePath, random_bytes(1024 * 1024 * 20));
                     $md5 = md5_file($filePath);
 
-                    $request->respond(
-                        fopen($filePath, 'r'),
-                        [
-                            'Content-Type'        => 'application/octet-stream',
-                            'Content-Disposition' => 'attachment; filename="test.bin"',
-                            'Content-MD5'         => $md5,
-                            'Content-Length'      => strval(filesize($filePath)),
-                        ]
-                    );
+                    $response = (new Response(200, [
+                        'Content-Type'        => 'application/octet-stream',
+                        'Content-Disposition' => 'attachment; filename="test.bin"',
+                        'Content-MD5'         => $md5,
+                        'Content-Length'      => strval(filesize($filePath)),
+                    ]))->withBody(fopen($filePath, 'r'));
 
                     unlink($filePath);
-                    break;
+                    return $response;
 
                 case '/json':
-                    $request->respondJson([
+                    return Response::json([
                         'post'       => $request->POST,
                         'content'    => $request->CONTENT,
                         'connection' => $request->SERVER['HTTP_CONNECTION'] ?? '',
                     ]);
-                    break;
 
                 default:
-                    $request->respondJson(['error' => 'Not Found'], [], 404);
+                    return Response::json(['error' => 'Not Found'], 404);
             }
         };
 
