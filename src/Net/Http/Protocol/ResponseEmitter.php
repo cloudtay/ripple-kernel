@@ -3,16 +3,16 @@
 namespace Ripple\Net\Http\Protocol;
 
 use Psr\Http\Message\ResponseInterface;
+use Ripple\Net\Http\Response;
 use Ripple\Stream;
 
 use function sprintf;
 use function strtolower;
-use function method_exists;
 
 final class ResponseEmitter
 {
     /**
-     * @param ResponseInterface $response
+     * @param Response $response
      * @param Stream $stream
      * @return void
      * @throws Stream\Exception\ConnectionException
@@ -53,8 +53,7 @@ final class ResponseEmitter
         }
 
         $connection = strtolower($response->getHeaderLine('Connection'));
-        $shouldClose = $connection === 'close'
-            || (method_exists($response, 'shouldCloseAfterBody') && $response->shouldCloseAfterBody());
+        $shouldClose = $connection === 'close' || $response->shouldCloseAfterBody();
 
         if ($shouldClose) {
             $stream->close();

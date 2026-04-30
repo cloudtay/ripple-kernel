@@ -15,6 +15,8 @@ use function strlen;
 use function strpos;
 use function substr;
 use function trim;
+use function str_contains;
+use function str_starts_with;
 
 use const SEEK_SET;
 
@@ -229,7 +231,7 @@ final class NetworkResponseStream implements StreamInterface
         while (strlen($this->buffer) < 2) {
             $this->appendRaw();
         }
-        if (substr($this->buffer, 0, 2) !== "\r\n") {
+        if (!str_starts_with($this->buffer, "\r\n")) {
             throw new ProtocolException('Invalid HTTP chunk terminator.');
         }
 
@@ -238,11 +240,11 @@ final class NetworkResponseStream implements StreamInterface
 
     private function consumeTrailers(): void
     {
-        while (strpos($this->buffer, "\r\n\r\n") === false && substr($this->buffer, 0, 2) !== "\r\n") {
+        while (!str_contains($this->buffer, "\r\n\r\n") && !str_starts_with($this->buffer, "\r\n")) {
             $this->appendRaw();
         }
 
-        if (substr($this->buffer, 0, 2) === "\r\n") {
+        if (str_starts_with($this->buffer, "\r\n")) {
             $this->buffer = substr($this->buffer, 2);
             return;
         }

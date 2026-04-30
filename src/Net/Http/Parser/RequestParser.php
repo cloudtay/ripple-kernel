@@ -99,9 +99,9 @@ final class RequestParser
     private array $files;
 
     /**
-     * @var mixed
+     * @var string
      */
-    private mixed $content;
+    private string $content;
 
     /**
      * @var string
@@ -168,7 +168,7 @@ final class RequestParser
         $this->cookies = [];
         $this->files = [];
         $this->meta = $this->alwaysMeta;
-        $this->content = "";
+        $this->content = '';
         $this->multipart = null;
         $this->bodySize = 0;
         $this->contentLength = 0;
@@ -416,7 +416,7 @@ final class RequestParser
             method: $this->method->value,
             uri: new Uri("{$scheme}://{$host}{$target}"),
             headers: $headers,
-            body: BodyStream::fromString((string)$this->content),
+            body: BodyStream::fromString($this->content),
             serverParams: $this->meta,
             queryParams: $this->get,
             parsedBody: $this->post,
@@ -464,7 +464,7 @@ final class RequestParser
     {
         if ($this->method->value === 'POST') {
             if (str_contains($this->contentType, 'application/json')) {
-                $this->post = array_merge($this->post, json_decode($this->content, true) ?? []);
+                $this->post = array_merge($this->post, json_decode($content = $this->content, true) ?? []);
             } elseif ($this->contentType === 'application/x-www-form-urlencoded') {
                 parse_str($this->content, $this->post);
             }

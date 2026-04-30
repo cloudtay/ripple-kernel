@@ -7,6 +7,8 @@ use Ripple\Net\Http\BodyStream;
 use Ripple\Net\Http\Exception\RequestException;
 use Ripple\Net\Http\Request;
 use Ripple\Net\Http\Uri;
+use Throwable;
+use RuntimeException;
 
 use function array_key_exists;
 use function basename;
@@ -20,11 +22,23 @@ use function strcasecmp;
 
 final class MultipartStream extends AppendStream
 {
+    /**
+     * @var string
+     */
     private string $boundary;
 
+    /**
+     * @param array $parts
+     * @param string|null $boundary
+     */
     public function __construct(array $parts, ?string $boundary = null)
     {
-        $this->boundary = $boundary ?? bin2hex(random_bytes(20));
+        try {
+            $this->boundary = $boundary ?? bin2hex(random_bytes(20));
+        } catch (Throwable $e) {
+            throw new RuntimeException($e->getMessage(), $e->getCode(), $e);
+
+        }
         parent::__construct($this->buildStreams($parts));
     }
 

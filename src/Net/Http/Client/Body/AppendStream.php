@@ -147,7 +147,11 @@ class AppendStream implements StreamInterface
         return $contents;
     }
 
-    public function getMetadata(?string $key = null): mixed
+    /**
+     * @param string|null $key
+     * @return array|null
+     */
+    public function getMetadata(?string $key = null): ?array
     {
         return $key === null ? [] : null;
     }

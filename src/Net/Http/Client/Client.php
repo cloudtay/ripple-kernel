@@ -4,6 +4,7 @@ namespace Ripple\Net\Http\Client;
 
 use Closure;
 use Psr\Http\Client\ClientInterface;
+use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
@@ -17,6 +18,7 @@ use Ripple\Net\Http\Protocol\ResponseParser;
 use Ripple\Net\Http\Response;
 use Ripple\Runtime\Exception\CoroutineStateException;
 use Ripple\Runtime\Scheduler;
+use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
 use Ripple\Time;
 
@@ -74,7 +76,7 @@ final class Client implements ClientInterface
     /**
      * @param array $config
      */
-    public function __construct(private array $config = [])
+    public function __construct(private readonly array $config = [])
     {
         $this->connector = $config['connector'] ?? new Connector();
         $this->serializer = $config['serializer'] ?? new RequestSerializer();
@@ -236,12 +238,13 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
      * @return void
+     * @throws ConnectionException
      */
-    private function writeRequest(object $stream, RequestInterface $request, TransferOptions $transfer): void
+    private function writeRequest(Stream $stream, RequestInterface $request, TransferOptions $transfer): void
     {
         $stream->writeAll($this->serializer->serializeHeaders($request), $this->options->writeTimeout());
 
@@ -281,12 +284,13 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
-     * @return ResponseInterface
+     * @return Response
+     * @throws ConnectionException
      */
-    private function receiveToSink(object $stream, RequestInterface $request, TransferOptions $transfer): ResponseInterface
+    private function receiveToSink(Stream $stream, RequestInterface $request, TransferOptions $transfer): MessageInterface
     {
         [$statusCode, $headers, $reasonPhrase, $protocolVersion, $buffer] = $this->readFinalResponseHead($stream, $request);
         $sink = $this->openSink($transfer->sink());
@@ -319,12 +323,13 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
-     * @return ResponseInterface
+     * @return Response
+     * @throws ConnectionException
      */
-    private function receiveAsStream(object $stream, RequestInterface $request, TransferOptions $transfer): ResponseInterface
+    private function receiveAsStream(Stream $stream, RequestInterface $request, TransferOptions $transfer): MessageInterface
     {
         [$statusCode, $headers, $reasonPhrase, $protocolVersion, $buffer] = $this->readFinalResponseHead($stream, $request);
 
@@ -349,8 +354,8 @@ final class Client implements ClientInterface
             $contentLength,
             $isChunked,
             $this->options->maxBodyBytes(),
-            fn (): string => $this->readChunk($stream, $request),
-            static fn (): null => $stream->close(),
+            fn () => $this->readChunk($stream, $request),
+            static fn () => $stream->close(),
             function (int $downloaded) use ($transfer, $contentLength): void {
                 $this->notifyProgress($transfer, $contentLength ?? 0, $downloaded, $transfer->uploadTotal(), $transfer->uploadTotal());
             }
@@ -360,11 +365,12 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @return array{0:int,1:array,2:string,3:string,4:string}
+     * @throws ConnectionException
      */
-    private function readFinalResponseHead(object $stream, RequestInterface $request): array
+    private function readFinalResponseHead(Stream $stream, RequestInterface $request): array
     {
         $buffer = '';
 
@@ -431,9 +437,9 @@ final class Client implements ClientInterface
 
     /**
      * @param mixed $sink
-     * @return resource
+     * @return \StreamInterface
      */
-    private function openSink(mixed $sink): mixed
+    private function openSink(mixed $sink): \StreamInterface
     {
         if (is_resource($sink)) {
             return $sink;
@@ -478,15 +484,16 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
      * @param resource $sink
      * @param string $buffer
      * @param int $contentLength
      * @return void
+     * @throws ConnectionException
      */
-    private function receiveFixedBody(object $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer, int $contentLength): void
+    private function receiveFixedBody(Stream $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer, int $contentLength): void
     {
         $downloaded = 0;
         if ($buffer !== '') {
@@ -515,14 +522,15 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
      * @param resource $sink
      * @param string $buffer
      * @return int
+     * @throws ConnectionException
      */
-    private function receiveChunkedBody(object $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer): int
+    private function receiveChunkedBody(Stream $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer): int
     {
         $downloaded = 0;
         $offset = 0;
@@ -672,11 +680,12 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param object $stream
+     * @param Stream $stream
      * @param RequestInterface $request
      * @return string
+     * @throws ConnectionException
      */
-    private function readChunk(object $stream, RequestInterface $request): string
+    private function readChunk(Stream $stream, RequestInterface $request): string
     {
         $this->assertRequestNotExpired($request);
 
@@ -699,9 +708,7 @@ final class Client implements ClientInterface
             return $stream->read(8192);
         } finally {
             $timer->stop();
-            if (method_exists($stream, 'unwatchRead')) {
-                $stream->unwatchRead();
-            }
+            $stream->unwatchRead();
         }
     }
 }

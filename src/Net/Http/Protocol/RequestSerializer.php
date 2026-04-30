@@ -21,9 +21,13 @@ final class RequestSerializer
      */
     public function serialize(RequestInterface $request): string
     {
-        return $this->serializeHeaders($request) . (string)$request->getBody();
+        return $this->serializeHeaders($request) . $request->getBody();
     }
 
+    /**
+     * @param RequestInterface $request
+     * @return string
+     */
     public function serializeHeaders(RequestInterface $request): string
     {
         $target = $request->getRequestTarget();
@@ -36,8 +40,8 @@ final class RequestSerializer
 
         $headers = $this->prepareHeaders($request);
         foreach ($headers as $name => $values) {
-            $this->assertHeaderName($request, (string)$name);
-            foreach ((array)$values as $value) {
+            $this->assertHeaderName($request, $name);
+            foreach ($values as $value) {
                 $value = (string)$value;
                 $this->assertHeaderValue($request, $value);
                 $bytes .= "{$name}: {$value}\r\n";
@@ -47,6 +51,10 @@ final class RequestSerializer
         return $bytes . "\r\n";
     }
 
+    /**
+     * @param RequestInterface $request
+     * @return array[]
+     */
     private function prepareHeaders(RequestInterface $request): array
     {
         $headers = $request->getHeaders();
@@ -80,6 +88,11 @@ final class RequestSerializer
         return $headers;
     }
 
+    /**
+     * @param array $headers
+     * @param string $name
+     * @return bool
+     */
     private function hasHeader(array $headers, string $name): bool
     {
         foreach ($headers as $headerName => $_) {
@@ -91,6 +104,11 @@ final class RequestSerializer
         return false;
     }
 
+    /**
+     * @param RequestInterface $request
+     * @param string $name
+     * @return void
+     */
     private function assertHeaderName(RequestInterface $request, string $name): void
     {
         if ($name === '' || preg_match('/^[!#$%&\'*+.^_`|~0-9A-Za-z-]+$/', $name) !== 1) {
@@ -98,6 +116,11 @@ final class RequestSerializer
         }
     }
 
+    /**
+     * @param RequestInterface $request
+     * @param string $value
+     * @return void
+     */
     private function assertHeaderValue(RequestInterface $request, string $value): void
     {
         if (str_contains($value, "\r") || str_contains($value, "\n")) {
@@ -105,6 +128,9 @@ final class RequestSerializer
         }
     }
 
+    /**
+     * @return string
+     */
     private function defaultAcceptEncoding(): string
     {
         $encodings = 'gzip, deflate';

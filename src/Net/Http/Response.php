@@ -8,12 +8,9 @@ use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\StreamInterface;
 use Ripple\Net\Http\Enum\Status;
-use Ripple\Stream;
 
-use function filesize;
 use function gmdate;
 use function implode;
-use function is_file;
 use function is_numeric;
 use function is_resource;
 use function is_string;
@@ -23,7 +20,6 @@ use function rawurlencode;
 use function str_replace;
 use function strlen;
 use function strtolower;
-use function strval;
 use function trim;
 use function ucfirst;
 
@@ -295,9 +291,9 @@ final class Response implements ResponseInterface
 
     /**
      * @param string|null $name
-     * @return mixed
+     * @return string|array|null
      */
-    public function header(null|string $name = null): mixed
+    public function header(null|string $name = null): string|array|null
     {
         if ($name === null) {
             return $this->getHeaders();
@@ -414,9 +410,9 @@ final class Response implements ResponseInterface
     }
 
     /**
-     * @return mixed
+     * @return string
      */
-    public function body(): mixed
+    public function body(): string
     {
         return (string)$this->body;
     }
@@ -429,15 +425,6 @@ final class Response implements ResponseInterface
     {
         if ($body instanceof StreamInterface) {
             return $this->withPsrBody($body);
-        }
-
-        if ($body instanceof Stream) {
-            $path = $body->getMetadata('uri');
-            $response = $this->withPsrBody(BodyStream::fromString(''));
-            if (is_string($path) && $path !== '' && is_file($path)) {
-                $response = $response->withHeader('Content-Length', strval(filesize($path)));
-            }
-            return $response;
         }
 
         if (is_resource($body)) {

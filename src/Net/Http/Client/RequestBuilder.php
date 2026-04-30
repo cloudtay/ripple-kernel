@@ -23,6 +23,9 @@ use const JSON_UNESCAPED_UNICODE;
 final class RequestBuilder
 {
     /**
+     * @param string $method
+     * @param string $uri
+     * @param array $options
      * @return array{0:Request,1:TransferOptions}
      */
     public function build(string $method, string $uri, array $options): array
