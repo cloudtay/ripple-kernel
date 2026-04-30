@@ -15,22 +15,18 @@ use Ripple\Net\Http\Exception\ProtocolException;
 use Ripple\Net\Http\Exception\TimeoutException;
 use Ripple\Net\Http\Protocol\RequestSerializer;
 use Ripple\Net\Http\Protocol\ResponseParser;
+use Ripple\Net\Http\Protocol\TransferEncoding;
 use Ripple\Net\Http\Response;
 use Ripple\Runtime\Exception\CoroutineStateException;
 use Ripple\Runtime\Scheduler;
-use Ripple\Stream;
 use Ripple\Stream\Exception\ConnectionException;
 use Ripple\Time;
 
 use function array_slice;
 use function ctype_xdigit;
 use function explode;
-use function fclose;
 use function fopen;
-use function fflush;
-use function fwrite;
 use function hexdec;
-use function implode;
 use function is_callable;
 use function is_resource;
 use function is_string;
@@ -39,7 +35,6 @@ use function preg_match;
 use function rewind;
 use function strcasecmp;
 use function str_contains;
-use function stripos;
 use function strlen;
 use function strpos;
 use function strtoupper;
@@ -238,13 +233,13 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
      * @return void
      * @throws ConnectionException
      */
-    private function writeRequest(Stream $stream, RequestInterface $request, TransferOptions $transfer): void
+    private function writeRequest(object $stream, RequestInterface $request, TransferOptions $transfer): void
     {
         $stream->writeAll($this->serializer->serializeHeaders($request), $this->options->writeTimeout());
 
@@ -284,52 +279,49 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
      * @return Response
      * @throws ConnectionException
      */
-    private function receiveToSink(Stream $stream, RequestInterface $request, TransferOptions $transfer): MessageInterface
+    private function receiveToSink(object $stream, RequestInterface $request, TransferOptions $transfer): MessageInterface
     {
         [$statusCode, $headers, $reasonPhrase, $protocolVersion, $buffer] = $this->readFinalResponseHead($stream, $request);
         $sink = $this->openSink($transfer->sink());
 
-        try {
-            if ($this->isNoBodyResponse($request, $statusCode)) {
-                return (new Response($statusCode, $headers, $this->sinkBody($transfer->sink()), $reasonPhrase))->withProtocolVersion($protocolVersion);
-            }
-
-            $isChunked = $this->isChunked($headers);
-            $contentLength = $this->contentLength($headers);
-
-            if ($isChunked) {
-                $downloaded = $this->receiveChunkedBody($stream, $request, $transfer, $sink, $buffer);
-                $headers = $this->removeHeader($headers, 'Transfer-Encoding');
-                $headers['Content-Length'] = [(string)$downloaded];
-            } elseif ($contentLength !== null) {
-                $this->receiveFixedBody($stream, $request, $transfer, $sink, $buffer, $contentLength);
-            } else {
-                throw new ProtocolException('HTTP response body length is unknown.');
-            }
-
-            $this->flushSink($sink);
-            return (new Response($statusCode, $headers, $this->sinkBody($transfer->sink()), $reasonPhrase))->withProtocolVersion($protocolVersion);
-        } finally {
-            if (is_resource($sink) && is_string($transfer->sink())) {
-                fclose($sink);
-            }
+        if ($this->isNoBodyResponse($request, $statusCode)) {
+            return (new Response($statusCode, $headers, $this->sinkBody($sink), $reasonPhrase))->withProtocolVersion($protocolVersion);
         }
+
+        $isChunked = $this->isChunked($headers);
+        $contentLength = $this->contentLength($headers);
+        if ($isChunked && $contentLength !== null) {
+            throw new ProtocolException('Response cannot contain both Content-Length and Transfer-Encoding.');
+        }
+
+        if ($isChunked) {
+            $downloaded = $this->receiveChunkedBody($stream, $request, $transfer, $sink, $buffer);
+            $headers = $this->removeHeader($headers, 'Transfer-Encoding');
+            $headers['Content-Length'] = [(string)$downloaded];
+        } elseif ($contentLength !== null) {
+            $this->receiveFixedBody($stream, $request, $transfer, $sink, $buffer, $contentLength);
+        } else {
+            throw new ProtocolException('HTTP response body length is unknown.');
+        }
+
+        $this->flushSink($sink);
+        return (new Response($statusCode, $headers, $this->sinkBody($sink), $reasonPhrase))->withProtocolVersion($protocolVersion);
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
      * @return Response
      * @throws ConnectionException
      */
-    private function receiveAsStream(Stream $stream, RequestInterface $request, TransferOptions $transfer): MessageInterface
+    private function receiveAsStream(object $stream, RequestInterface $request, TransferOptions $transfer): MessageInterface
     {
         [$statusCode, $headers, $reasonPhrase, $protocolVersion, $buffer] = $this->readFinalResponseHead($stream, $request);
 
@@ -340,6 +332,10 @@ final class Client implements ClientInterface
 
         $isChunked = $this->isChunked($headers);
         $contentLength = $this->contentLength($headers);
+        if ($isChunked && $contentLength !== null) {
+            $stream->close();
+            throw new ProtocolException('Response cannot contain both Content-Length and Transfer-Encoding.');
+        }
         if (!$isChunked && $contentLength === null) {
             $stream->close();
             throw new ProtocolException('HTTP response body length is unknown.');
@@ -365,12 +361,12 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @return array{0:int,1:array,2:string,3:string,4:string}
      * @throws ConnectionException
      */
-    private function readFinalResponseHead(Stream $stream, RequestInterface $request): array
+    private function readFinalResponseHead(object $stream, RequestInterface $request): array
     {
         $buffer = '';
 
@@ -437,20 +433,22 @@ final class Client implements ClientInterface
 
     /**
      * @param mixed $sink
-     * @return \StreamInterface
+     * @return StreamInterface
      */
-    private function openSink(mixed $sink): \StreamInterface
+    private function openSink(mixed $sink): StreamInterface
     {
         if (is_resource($sink)) {
-            return $sink;
+            return new BodyStream($sink);
         }
+
         if ($sink instanceof StreamInterface) {
             return $sink;
         }
+
         if (is_string($sink)) {
-            $resource = fopen($sink, 'wb');
+            $resource = fopen($sink, 'w+b');
             if (is_resource($resource)) {
-                return $resource;
+                return new BodyStream($resource);
             }
         }
 
@@ -484,16 +482,16 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
-     * @param resource $sink
+     * @param StreamInterface $sink
      * @param string $buffer
      * @param int $contentLength
      * @return void
      * @throws ConnectionException
      */
-    private function receiveFixedBody(Stream $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer, int $contentLength): void
+    private function receiveFixedBody(object $stream, RequestInterface $request, TransferOptions $transfer, StreamInterface $sink, string $buffer, int $contentLength): void
     {
         $downloaded = 0;
         if ($buffer !== '') {
@@ -522,15 +520,15 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @param TransferOptions $transfer
-     * @param resource $sink
+     * @param StreamInterface $sink
      * @param string $buffer
      * @return int
      * @throws ConnectionException
      */
-    private function receiveChunkedBody(Stream $stream, RequestInterface $request, TransferOptions $transfer, mixed $sink, string $buffer): int
+    private function receiveChunkedBody(object $stream, RequestInterface $request, TransferOptions $transfer, StreamInterface $sink, string $buffer): int
     {
         $downloaded = 0;
         $offset = 0;
@@ -575,32 +573,30 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param resource $sink
+     * @param StreamInterface $sink
      * @param string $chunk
      * @return void
      */
-    private function writeSink(mixed $sink, string $chunk): void
+    private function writeSink(StreamInterface $sink, string $chunk): void
     {
-        if ($chunk === '') {
-            return;
-        }
-        if ($sink instanceof StreamInterface) {
-            $sink->write($chunk);
-            return;
-        }
-        if (fwrite($sink, $chunk) === false) {
-            throw new ProtocolException('Unable to write response sink.');
+        $remaining = $chunk;
+        while ($remaining !== '') {
+            $written = $sink->write($remaining);
+            if ($written <= 0) {
+                throw new ProtocolException('Unable to write response sink.');
+            }
+            $remaining = substr($remaining, $written);
         }
     }
 
     /**
-     * @param mixed $sink
+     * @param StreamInterface $sink
      * @return void
      */
-    private function flushSink(mixed $sink): void
+    private function flushSink(StreamInterface $sink): void
     {
-        if (is_resource($sink)) {
-            fflush($sink);
+        if (method_exists($sink, 'flush')) {
+            $sink->flush();
         }
     }
 
@@ -644,13 +640,7 @@ final class Client implements ClientInterface
      */
     private function isChunked(array $headers): bool
     {
-        foreach ($headers as $name => $values) {
-            if (strcasecmp((string)$name, 'Transfer-Encoding') === 0 && stripos(implode(', ', $values), 'chunked') !== false) {
-                return true;
-            }
-        }
-
-        return false;
+        return TransferEncoding::isChunked($headers);
     }
 
     /**
@@ -680,12 +670,12 @@ final class Client implements ClientInterface
     }
 
     /**
-     * @param Stream $stream
+     * @param object $stream
      * @param RequestInterface $request
      * @return string
      * @throws ConnectionException
      */
-    private function readChunk(Stream $stream, RequestInterface $request): string
+    private function readChunk(object $stream, RequestInterface $request): string
     {
         $this->assertRequestNotExpired($request);
 

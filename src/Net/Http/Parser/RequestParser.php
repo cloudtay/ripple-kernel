@@ -416,7 +416,7 @@ final class RequestParser
             method: $this->method->value,
             uri: new Uri("{$scheme}://{$host}{$target}"),
             headers: $headers,
-            body: BodyStream::fromString($this->content),
+            body: BodyStream::fromString((string)$this->content),
             serverParams: $this->meta,
             queryParams: $this->get,
             parsedBody: $this->post,

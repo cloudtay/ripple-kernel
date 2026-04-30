@@ -8,6 +8,7 @@ use Throwable;
 
 use function fclose;
 use function feof;
+use function fflush;
 use function fopen;
 use function fread;
 use function fseek;
@@ -95,6 +96,18 @@ final class BodyStream implements StreamInterface
         }
 
         $this->resource = null;
+    }
+
+    /**
+     * 刷新底层流缓冲区
+     * @return void
+     */
+    public function flush(): void
+    {
+        $this->assertAttached();
+        if (!fflush($this->resource)) {
+            throw new RuntimeException('Unable to flush stream.');
+        }
     }
 
     /**

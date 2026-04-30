@@ -153,6 +153,51 @@ final class ProtocolTest extends TestCase
         self::assertFalse($responses[0]->hasHeader('Transfer-Encoding'));
     }
 
+    public function testParserAcceptsChunkedTransferEncodingParameters(): void
+    {
+        $parser = new ResponseParser();
+        $responses = $parser->push(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked; level=1\r\n\r\n" .
+            "2\r\nhi\r\n0\r\n\r\n"
+        );
+
+        self::assertCount(1, $responses);
+        self::assertSame('hi', (string)$responses[0]->getBody());
+    }
+
+    public function testParserRejectsResponseWithBothTransferEncodingAndContentLength(): void
+    {
+        $this->expectException(\Ripple\Net\Http\Exception\ProtocolException::class);
+
+        $parser = new ResponseParser();
+        $parser->push(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n" .
+            "2\r\nhi\r\n0\r\n\r\n"
+        );
+    }
+
+    public function testParserRejectsUnsupportedTransferEncoding(): void
+    {
+        $this->expectException(\Ripple\Net\Http\Exception\ProtocolException::class);
+
+        $parser = new ResponseParser();
+        $parser->push(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip, chunked\r\n\r\n" .
+            "1f\r\n\x1f\x8bunsupported-transfer-coding\r\n0\r\n\r\n"
+        );
+    }
+
+    public function testParserRejectsDuplicateChunkedTransferEncoding(): void
+    {
+        $this->expectException(\Ripple\Net\Http\Exception\ProtocolException::class);
+
+        $parser = new ResponseParser();
+        $parser->push(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked, chunked\r\n\r\n" .
+            "2\r\nhi\r\n0\r\n\r\n"
+        );
+    }
+
     public function testParserAllowsRepeatedIdenticalContentLength(): void
     {
         $parser = new ResponseParser();

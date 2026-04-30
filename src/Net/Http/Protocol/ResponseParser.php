@@ -10,10 +10,8 @@ use function array_slice;
 use function ctype_xdigit;
 use function explode;
 use function hexdec;
-use function implode;
 use function preg_match;
 use function strcasecmp;
-use function stripos;
 use function strlen;
 use function strpos;
 use function strtoupper;
@@ -125,6 +123,9 @@ final class ResponseParser
 
         $isChunked = $this->isChunked($headers);
         $contentLength = $this->contentLength($headers);
+        if ($isChunked && $contentLength !== null) {
+            throw new ProtocolException('Response cannot contain both Content-Length and Transfer-Encoding.');
+        }
 
         if ($isChunked) {
             [$body, $consumed] = $this->parseChunked($rest);
@@ -204,13 +205,7 @@ final class ResponseParser
      */
     private function isChunked(array $headers): bool
     {
-        foreach ($headers as $name => $values) {
-            if (strcasecmp((string)$name, 'Transfer-Encoding') === 0 && stripos(implode(', ', $values), 'chunked') !== false) {
-                return true;
-            }
-        }
-
-        return false;
+        return TransferEncoding::isChunked($headers);
     }
 
     /**

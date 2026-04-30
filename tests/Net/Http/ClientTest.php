@@ -3,17 +3,20 @@
 namespace Ripple\Tests\Net\Http;
 
 use PHPUnit\Framework\TestCase;
+use Psr\Http\Message\StreamInterface;
 use Ripple\Net\Http\BodyStream;
 use Ripple\Net\Http\Client\Client;
 use Ripple\Net\Http\Request;
 use Ripple\Net\Http\Response;
 use Ripple\Net\Http\Uri;
+use ReflectionMethod;
 use Throwable;
 
 use function array_shift;
 use function file_get_contents;
 use function gzencode;
 use function fclose;
+use function fopen;
 use function strlen;
 use function stream_set_blocking;
 use function stream_socket_pair;
@@ -342,6 +345,25 @@ final class ClientTest extends TestCase
             self::assertSame([6, 6, 0, 0], $progress[count($progress) - 1]);
         } finally {
             unlink($sink);
+        }
+    }
+
+    public function testClientOpensResourceAndPathSinksAsStreams(): void
+    {
+        $client = new Client();
+        $openSink = new ReflectionMethod($client, 'openSink');
+        $openSink->setAccessible(true);
+
+        $resource = fopen('php://temp', 'w+');
+        self::assertIsResource($resource);
+        $path = tempnam(sys_get_temp_dir(), 'ripple_sink_');
+
+        try {
+            self::assertInstanceOf(StreamInterface::class, $openSink->invoke($client, $resource));
+            self::assertInstanceOf(StreamInterface::class, $openSink->invoke($client, $path));
+        } finally {
+            fclose($resource);
+            unlink($path);
         }
     }
 
