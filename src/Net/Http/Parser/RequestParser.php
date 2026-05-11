@@ -464,7 +464,7 @@ final class RequestParser
     {
         if ($this->method->value === 'POST') {
             if (str_contains($this->contentType, 'application/json')) {
-                $this->post = array_merge($this->post, json_decode($content = $this->content, true) ?? []);
+                $this->post = array_merge($this->post, json_decode($this->content ?? "", true) ?? []);
             } elseif ($this->contentType === 'application/x-www-form-urlencoded') {
                 parse_str($this->content, $this->post);
             }
